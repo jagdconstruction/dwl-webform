@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>DWL 3.0 Web Form</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="resetTop" type="button">Reset</button>
+    <button id="printPdf" type="button">Print / Save PDF</button>
+    <span style="margin-left:auto; font-size:12px; opacity:0.7;">DWL 3.0 (web overlay)</span>
+  </div>
+
+  <div class="canvas">
+    <div id="page">
+      <img id="bg" src="dwl_page1.png" alt="DWL background"/>
+      <!-- fields injected by app.js -->
+    </div>
+  </div>
+
+  <!-- Used for consistent one-page PDF output across phone/desktop -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/3.0.3/jspdf.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

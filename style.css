@@ -1,0 +1,237 @@
+
+:root{
+  --ui-font: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+body{
+  margin: 0;
+  font-family: var(--ui-font);
+  background: #f5f5f5;
+}
+
+.toolbar{
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+  background: #ffffff;
+  border-bottom: 1px solid #ddd;
+}
+
+.toolbar button{
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.toolbar .file{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.canvas{
+  padding: 14px 12px 30px;
+  display: flex;
+  justify-content: center;
+}
+
+#page{
+  position: relative;
+  width: min(1100px, 98vw);
+  /* height comes from the img */
+}
+
+#bg{
+  width: 100%;
+  height: auto;
+  display: block;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.18);
+}
+
+.field-wrapper{
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+}
+
+.field{
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+
+  /* Make fields feel like they are printed on the PDF */
+  border: none;
+  background: transparent;
+  outline: none;
+
+  color: #000;
+}
+
+.field.input, .field.select, .field.textarea{
+  padding: 0 2px;
+}
+
+.field.textarea{
+  resize: none;
+}
+
+.field.select{
+  /* keep native arrow (so it behaves like Acrobat before selection) */
+  font-weight: 700 !important;
+  font-synthesis: weight;
+}
+
+/* Some browsers ignore styling on <option>, but this helps where supported */
+.field.select option{
+  font-weight: 700 !important;
+}
+
+/* Date inputs (native calendar picker)
+   Reserve space for the picker icon so large font sizes don't get covered. */
+.field.date{
+  /* Keep date text from sitting under the calendar icon */
+  padding-right: 40px;
+}
+
+/* Chromium/WebKit calendar icon sizing */
+.field.date::-webkit-calendar-picker-indicator{
+  width: 12px;
+  height: 12px;
+  transform: scale(0.45);
+  transform-origin: right center;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.field.date::-webkit-inner-spin-button,
+.field.date::-webkit-clear-button{
+  display: none;
+}
+
+.field.date::-webkit-datetime-edit{
+  /* Some browsers don't respect input padding for the datetime edit region */
+  padding-right: 48px;
+}
+
+/* Signature pad (Option B) */
+.signature-canvas{
+  display: block;
+  background: transparent;
+  touch-action: none; /* allow drawing on phones/tablets without scrolling */
+  cursor: pointer;
+}
+
+.toggle-wrap{
+  cursor: default;
+}
+
+.toggle-txt{
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 700 !important;
+}
+
+/* Signature popup (Option B: click to open a larger signing pad) */
+.sig-modal{
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0,0,0,0.55);
+}
+
+.sig-modal.open{
+  display: flex;
+}
+
+.sig-modal-box{
+  width: min(900px, 96vw);
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+  padding: 12px 12px 10px;
+}
+
+.sig-modal-header{
+  font-size: 14px;
+  font-weight: 700;
+  margin: 2px 2px 8px;
+}
+
+.sig-modal-canvas{
+  width: 100%;
+  height: 240px;
+  display: block;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #fff;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.sig-modal-actions{
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.sig-modal-actions button{
+  padding: 8px 12px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.reset-btn{
+  width: 100%;
+  height: 100%;
+  border: 1px solid #333;
+  background: transparent;
+  font-weight: 700;
+  cursor: pointer;
+}
+.reset-btn:active{
+  transform: translateY(1px);
+}
+
+.nolunch{
+  cursor: pointer;
+}
+
+
+@media print{
+  body{
+    background: #ffffff;
+  }
+  .toolbar{
+    display: none !important;
+  }
+  .canvas{
+    padding: 0;
+  }
+  #page{
+    width: 100%;
+  }
+  #bg{
+    box-shadow: none;
+  }
+
+  .sig-modal{
+    display: none !important;
+  }
+}
