@@ -35,22 +35,37 @@ body{
 }
 
 .canvas{
-  padding: 14px 12px 30px;
+  padding: 14px 12px 18px;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 18px;
 }
 
-#page{
+.page{
   position: relative;
   width: min(1100px, 98vw);
   /* height comes from the img */
 }
 
-#bg{
+.page img{
   width: 100%;
   height: auto;
   display: block;
   box-shadow: 0 6px 22px rgba(0,0,0,0.18);
+}
+
+.bottom-actions{
+  padding: 0 12px 30px;
+  display: flex;
+  justify-content: center;
+}
+
+.bottom-actions button{
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
 }
 
 .field-wrapper{
@@ -213,6 +228,17 @@ body{
   cursor: pointer;
 }
 
+.select-arrow{
+  position: absolute;
+  right: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 
 @media print{
   body{
@@ -221,13 +247,16 @@ body{
   .toolbar{
     display: none !important;
   }
+  .bottom-actions{
+    display: none !important;
+  }
   .canvas{
     padding: 0;
   }
-  #page{
+  .page{
     width: 100%;
   }
-  #bg{
+  .page img{
     box-shadow: none;
   }
 

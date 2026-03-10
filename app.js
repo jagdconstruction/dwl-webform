@@ -65,6 +65,8 @@ for (const def of FIELD_DEFS) {
     const newHeight = 3.8; // percent of page height
     def.rect.height = Math.min(newHeight, bottom - 0.5);
     def.rect.top = Math.max(0.5, bottom - def.rect.height);
+    def.signature = true;
+    def.sigGroup = "Signature4";
   }
 }
 
@@ -99,6 +101,224 @@ const choiceToggleByName = new Map(); // name -> {selectEl, displayEl} (hide arr
 // Signature pads (Option B: popup signature pad)
 // Preview canvas lives in the form; tapping/clicking it opens a larger signing pad.
 const sigPads = new Map(); // name -> {canvas, ctx, dpr, dataUrl}
+const sigGroupData = new Map(); // group -> dataUrl
+
+// Additional page (workforce continuation)
+let extraPageAdded = false;
+let extraPageDefs = [];
+
+function _cloneRectWithNewY(rect, topPct, heightPct) {
+  return {
+    left: rect.left,
+    top: topPct,
+    width: rect.width,
+    height: heightPct,
+  };
+}
+
+function _findDefBy(fn) {
+  return FIELD_DEFS.find(fn) || null;
+}
+
+function _buildAdditionalPageDefs() {
+  const baseEmployee = _findDefBy((d) => d.kind === 'choice' && d.name === 'Dropdown1.0.0');
+  const baseLocation = _findDefBy((d) => d.kind === 'text' && d.name === 'Location.0');
+  const baseActivity = _findDefBy((d) => d.kind === 'choice' && d.name === 'Activity_DD_1.0');
+  const baseClass = _findDefBy((d) => d.kind === 'choice' && d.name === 'Class_DD_1.0');
+  const baseLocal = _findDefBy((d) => d.kind === 'choice' && d.name === 'Local_DD_1.0');
+  const baseNoLunch = _findDefBy((d) => d.kind === 'nolunch' && d.name === 'Text1.0');
+
+  const baseStraight = _findDefBy((d) => d.kind === 'toggle' && d.ddName === 'ST_DD_1.0');
+  const baseOver = _findDefBy((d) => d.kind === 'toggle' && d.ddName === 'ST_DD_1.1');
+  const basePT = _findDefBy((d) => d.kind === 'toggle' && d.ddName === 'ST_DD_1.3');
+  const baseRT = _findDefBy((d) => d.kind === 'toggle' && d.ddName === 'ST_DD_1.4');
+
+  const basePrint = _findDefBy((d) => d.kind === 'text' && d.name === 'Text2');
+  const baseSig = _findDefBy((d) => d.kind === 'text' && d.name === 'Signature4');
+  const baseDate = _findDefBy((d) => d.kind === 'text' && d.name === 'Date3_af_date');
+
+  if (!baseEmployee || !baseLocation || !baseActivity || !baseClass || !baseLocal || !baseNoLunch || !baseStraight || !baseOver || !basePT || !baseRT || !basePrint || !baseSig || !baseDate) {
+    console.warn('Unable to build additional page defs: missing a base field definition.');
+    return [];
+  }
+
+  const H = DESIGN.bgHeightPx;
+  const tableTopPx = 120;
+  const headerPx = 34;
+  const rowPx = 40;
+  const rowInnerTopPx = tableTopPx + headerPx;
+  const rowInnerHeightPx = rowPx;
+
+  const startIndex = 20; // page 1 has 20 workforce rows
+  const rowCount = 30;
+  const defs = [];
+
+  for (let r = 0; r < rowCount; r++) {
+    const idx = startIndex + r; // 0-based row index across pages
+    const rowNum = idx + 1; // 1-based for ST_DD/ST_TXT naming
+    const topPx = rowInnerTopPx + r * rowPx;
+    const topPct = (topPx / H) * 100;
+    const heightPct = (rowInnerHeightPx / H) * 100;
+
+    defs.push({
+      ...baseEmployee,
+      name: `Dropdown1.0.${idx}`,
+      rect: _cloneRectWithNewY(baseEmployee.rect, topPct, heightPct),
+    });
+
+    defs.push({
+      ...baseLocation,
+      name: `Location.${idx}`,
+      rect: _cloneRectWithNewY(baseLocation.rect, topPct, heightPct),
+    });
+
+    defs.push({
+      ...baseActivity,
+      name: `Activity_DD_1.${idx}`,
+      rect: _cloneRectWithNewY(baseActivity.rect, topPct, heightPct),
+    });
+
+    defs.push({
+      ...baseClass,
+      name: `Class_DD_1.${idx}`,
+      rect: _cloneRectWithNewY(baseClass.rect, topPct, heightPct),
+    });
+
+    defs.push({
+      ...baseLocal,
+      name: `Local_DD_1.${idx}`,
+      rect: _cloneRectWithNewY(baseLocal.rect, topPct, heightPct),
+    });
+
+    const mkToggle = (base, col) => ({
+      ...base,
+      ddName: `ST_DD_${rowNum}.${col}`,
+      txtName: `ST_TXT_${rowNum}.${col}`,
+      rect: _cloneRectWithNewY(base.rect, topPct, heightPct),
+    });
+    defs.push(mkToggle(baseStraight, 0));
+    defs.push(mkToggle(baseOver, 1));
+    defs.push(mkToggle(basePT, 3));
+    defs.push(mkToggle(baseRT, 4));
+
+    defs.push({
+      ...baseNoLunch,
+      name: `NoLunch.${idx}`,
+      rect: _cloneRectWithNewY(baseNoLunch.rect, topPct, heightPct),
+    });
+  }
+
+  const tableBottomPx = tableTopPx + headerPx + rowCount * rowPx;
+  const bottomTopPx = tableBottomPx + 56; // aligns to dwl_page2.png underlines
+  const bottomHeightPx = 42;
+  const bottomTopPct = (bottomTopPx / H) * 100;
+  const bottomHeightPct = (bottomHeightPx / H) * 100;
+
+  defs.push({
+    ...basePrint,
+    name: 'Text2_p2',
+    rect: _cloneRectWithNewY(basePrint.rect, bottomTopPct, bottomHeightPct),
+  });
+
+  defs.push({
+    ...baseSig,
+    name: 'Signature4_p2',
+    signature: true,
+    sigGroup: 'Signature4',
+    rect: _cloneRectWithNewY(baseSig.rect, bottomTopPct, bottomHeightPct),
+  });
+
+  defs.push({
+    ...baseDate,
+    name: 'Date3_p2_af_date',
+    rect: _cloneRectWithNewY(baseDate.rect, bottomTopPct, bottomHeightPct),
+  });
+
+  return defs;
+}
+
+function _linkTwoInputs(nameA, nameB) {
+  const a = elByName.get(nameA);
+  const b = elByName.get(nameB);
+  if (!a || !b) return;
+
+  let syncing = false;
+  const sync = (from, to) => {
+    if (syncing) return;
+    syncing = true;
+    to.value = from.value;
+    syncing = false;
+  };
+
+  a.addEventListener('input', () => sync(a, b));
+  a.addEventListener('change', () => sync(a, b));
+  b.addEventListener('input', () => sync(b, a));
+  b.addEventListener('change', () => sync(b, a));
+
+  b.value = a.value;
+}
+
+function addAdditionalPage() {
+  if (extraPageAdded) return;
+
+  const canvasWrap = document.querySelector('.canvas');
+  if (!canvasWrap) return;
+
+  const page2 = document.createElement('div');
+  page2.id = 'page2';
+  page2.className = 'page';
+
+  const bg2 = document.createElement('img');
+  bg2.id = 'bg2';
+  bg2.src = 'dwl_page2.png';
+  bg2.alt = 'DWL additional page';
+  page2.appendChild(bg2);
+
+  canvasWrap.appendChild(page2);
+
+  extraPageDefs = _buildAdditionalPageDefs();
+  for (const def of extraPageDefs) {
+    switch (def.kind) {
+      case 'text':
+        createTextField(def, page2);
+        break;
+      case 'choice':
+        createChoiceField(def, page2);
+        break;
+      case 'toggle':
+        createToggleField(def, page2);
+        break;
+      case 'nolunch':
+        createNoLunchToggle(def, page2);
+        break;
+      case 'button':
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Preserve employee names on reset (same behavior as page 1)
+  for (const def of extraPageDefs) {
+    if (def.kind === 'choice' && def.name.startsWith('Dropdown1.')) {
+      PRESERVE_ON_RESET.add(def.name);
+    }
+  }
+
+  // Link Print Name and Date across pages
+  _linkTwoInputs('Text2', 'Text2_p2');
+  _linkTwoInputs('Date3_af_date', 'Date3_p2_af_date');
+
+  bg2.addEventListener('load', applyScale);
+  extraPageAdded = true;
+  applyScale();
+
+  const addBtn = document.getElementById('addPageBtn');
+  if (addBtn) {
+    addBtn.disabled = true;
+    addBtn.textContent = 'Additional Page Added';
+  }
+}
 
 // Signature modal elements/state
 let sigModal = null;
@@ -107,7 +327,7 @@ let sigModalCtx = null;
 let sigModalDpr = 1;
 let sigModalIsDown = false;
 let sigModalHasInk = false;
-let sigActiveName = null;
+let sigActiveGroup = null;
 let _bodyOverflowBeforeModal = "";
 
 function _clearSigPad(pad) {
@@ -118,6 +338,7 @@ function _clearSigPad(pad) {
 }
 
 function clearAllSignatures() {
+  sigGroupData.clear();
   for (const pad of sigPads.values()) _clearSigPad(pad);
   // If the modal is open, clear it too
   if (sigModalCtx && sigModalCanvas) {
@@ -170,25 +391,33 @@ function resizeAllSignatures() {
 function createSignaturePad(def, page) {
   const wrap = makeFieldWrapper(def);
 
+  const sigGroup = def.sigGroup || def.name;
+
   // Preview canvas on the form
   const canvas = document.createElement('canvas');
   canvas.className = 'field signature-canvas';
   canvas.id = sanitizeId(def.name);
   canvas.dataset.sigName = def.name;
+  canvas.dataset.sigGroup = sigGroup;
   canvas.setAttribute('aria-label', 'Signature (tap to sign)');
 
   wrap.appendChild(canvas);
   page.appendChild(wrap);
 
-  const pad = { canvas: canvas, ctx: canvas.getContext('2d'), dpr: 1, dataUrl: null };
+  const pad = { canvas: canvas, ctx: canvas.getContext('2d'), dpr: 1, dataUrl: null, group: sigGroup };
   sigPads.set(def.name, pad);
+
+  // If this signature group already has a value, show it.
+  if (sigGroupData.has(sigGroup)) {
+    pad.dataUrl = sigGroupData.get(sigGroup);
+  }
 
   // Open the popup signature pad when clicked/tapped
   function _openSigModal(ev) {
     if (ev && ev.preventDefault) ev.preventDefault();
     // Avoid double-open
     if (sigModal && sigModal.classList && sigModal.classList.contains('open')) return;
-    openSignatureModal(def.name);
+    openSignatureModal(sigGroup);
   }
 
   // Click works everywhere; pointer/touch are added for responsiveness on phones/tablets.
@@ -197,7 +426,7 @@ function createSignaturePad(def, page) {
   canvas.addEventListener('mousedown', _openSigModal);
   canvas.addEventListener('touchstart', _openSigModal, { passive: false });
 
-_resizeSignaturePad(def.name);
+  _resizeSignaturePad(def.name);
 }
 
 function ensureSignatureModal() {
@@ -385,9 +614,9 @@ function drawDataUrlToModal(url) {
   img.src = url;
 }
 
-function openSignatureModal(sigName) {
+function openSignatureModal(sigGroup) {
   ensureSignatureModal();
-  sigActiveName = sigName;
+  sigActiveGroup = sigGroup;
   sigModalHasInk = false;
   sigModal.classList.add('open');
   // Inline display fallback in case CSS is cached/old
@@ -400,32 +629,33 @@ function openSignatureModal(sigName) {
   // Wait one frame so display:flex has taken effect and bounding boxes are correct
   requestAnimationFrame(() => {
     resizeSignatureModal(false);
-    const pad = sigPads.get(sigName);
-    if (pad && pad.dataUrl) {
-      drawDataUrlToModal(pad.dataUrl);
-    }
+    const existing = sigGroupData.get(sigGroup);
+    if (existing) drawDataUrlToModal(existing);
   });
 }
 
 function closeSignatureModal(save) {
   if (!sigModal || !sigModalCanvas) return;
 
-  if (save && sigActiveName) {
-    const pad = sigPads.get(sigActiveName);
-    if (pad) {
-      if (sigModalHasInk) {
-        pad.dataUrl = sigModalCanvas.toDataURL('image/png');
-        _resizeSignaturePad(sigActiveName);
-      } else {
-        _clearSigPad(pad);
-      }
+  if (save && sigActiveGroup) {
+    const dataUrl = sigModalHasInk ? sigModalCanvas.toDataURL('image/png') : null;
+
+    if (dataUrl) sigGroupData.set(sigActiveGroup, dataUrl);
+    else sigGroupData.delete(sigActiveGroup);
+
+    for (const [name, pad] of sigPads.entries()) {
+      const group = pad.group || name;
+      if (group !== sigActiveGroup) continue;
+      pad.dataUrl = dataUrl;
+      if (dataUrl) _resizeSignaturePad(name);
+      else _clearSigPad(pad);
     }
   }
 
   sigModal.classList.remove('open');
   sigModal.style.display = 'none';
   document.body.style.overflow = _bodyOverflowBeforeModal;
-  sigActiveName = null;
+  sigActiveGroup = null;
 }
 
 function sanitizeId(name) {
@@ -464,46 +694,47 @@ function setScaledFont(el, fontPt) {
 }
 
 function applyScale() {
-  const page = document.getElementById("page");
   const bg = document.getElementById("bg");
-  if (!page || !bg) return;
+  if (!bg) return;
 
   const currentWidth = bg.clientWidth;
   const scale = currentWidth / DESIGN.bgWidthPx;
 
-  // Scale font sizes (pt -> px at design -> scale)
-  const all = page.querySelectorAll("[data-font-pt]");
-  for (const el of all) {
-    const ptStr = el.dataset.fontPt;
-    if (!ptStr) continue;
-    const pt = parseFloat(ptStr);
-    if (!isFinite(pt)) continue;
+  for (const page of document.querySelectorAll(".page")) {
+    // Scale font sizes (pt -> px at design -> scale)
+    const all = page.querySelectorAll("[data-font-pt]");
+    for (const el of all) {
+      const ptStr = el.dataset.fontPt;
+      if (!ptStr) continue;
+      const pt = parseFloat(ptStr);
+      if (!isFinite(pt)) continue;
 
-    const pxAtDesign = pt * DESIGN.pxPerPtAtDesign; // since bg is 2x, pxPerPtAtDesign ~ 2
-    el.style.fontSize = (pxAtDesign * scale).toFixed(2) + "px";
-    el.style.lineHeight = "1";
-  }
+      const pxAtDesign = pt * DESIGN.pxPerPtAtDesign; // since bg is 2x, pxPerPtAtDesign ~ 2
+      el.style.fontSize = (pxAtDesign * scale).toFixed(2) + "px";
+      el.style.lineHeight = "1";
+    }
 
-  // Make dropdown text as large as possible without exceeding the field height.
-  // (Keeps on-screen readability high and makes exports consistent.)
-  const dropdownLike = page.querySelectorAll(".field.select, .toggle-txt");
-  for (const el of dropdownLike) {
-    const wrap = el.closest(".field-wrapper");
-    if (!wrap) continue;
+    // Make dropdown text as large as possible without exceeding the field height.
+    // (Keeps on-screen readability high and makes exports consistent.)
+    const dropdownLike = page.querySelectorAll(".field.select, .toggle-txt");
+    for (const el of dropdownLike) {
+      const wrap = el.closest(".field-wrapper");
+      if (!wrap) continue;
 
-    const h = wrap.getBoundingClientRect().height;
-    if (!h) continue;
+      const h = wrap.getBoundingClientRect().height;
+      if (!h) continue;
 
-    // Native <select> needs a little extra headroom; the text overlay can be larger.
-    const isSelect = el.tagName === "SELECT";
-    const factor = isSelect ? 0.80 : 0.95;
-    const cap = isSelect ? 36 : 46;
+      // Native <select> needs a little extra headroom; the text overlay can be larger.
+      const isSelect = el.tagName === "SELECT";
+      const factor = isSelect ? 0.80 : 0.95;
+      const cap = isSelect ? 36 : 46;
 
-    let px = Math.floor(h * factor);
-    px = Math.max(10, Math.min(cap, px));
+      let px = Math.floor(h * factor);
+      px = Math.max(10, Math.min(cap, px));
 
-    el.style.fontSize = px + "px";
-    el.style.lineHeight = "1";
+      el.style.fontSize = px + "px";
+      el.style.lineHeight = "1";
+    }
   }
 
   // Keep signature pad canvases crisp and correctly sized
@@ -594,6 +825,9 @@ function createChoiceField(def, page) {
   const align = alignFromQ(def.align);
   const opts = buildOptionElements(def.options);
 
+  const isEmployee = def.name.startsWith("Dropdown1.");
+  const isLocal = def.name.startsWith("Local_DD_");
+
   if (def.editable) {
     // Editable combo box -> input + datalist
     const input = document.createElement("input");
@@ -632,11 +866,25 @@ function createChoiceField(def, page) {
     sel.style.textAlign = align;
     setScaledFont(sel, def.font || 12);
 
-    for (const o of opts) {
+    const finalOpts = isLocal ? [...opts, { value: "__OTHER__", label: "Custom…" }] : opts;
+    for (const o of finalOpts) {
       const optEl = document.createElement("option");
       optEl.value = o.value;
       optEl.textContent = o.label;
       sel.appendChild(optEl);
+    }
+
+    // Employee dropdowns: native arrows are inconsistent on phones.
+    // Force-hide the native arrow and draw a clear arrow icon.
+    let arrowEl = null;
+    if (isEmployee) {
+      sel.style.appearance = "none";
+      sel.style.webkitAppearance = "none";
+      sel.style.paddingRight = "18px";
+      arrowEl = document.createElement("div");
+      arrowEl.className = "select-arrow";
+      arrowEl.textContent = "▼";
+      wrap.appendChild(arrowEl);
     }
 
     const disp = document.createElement("div");
@@ -650,17 +898,91 @@ function createChoiceField(def, page) {
     // initial state: show dropdown, hide big text
     disp.style.display = "none";
 
-    function toDisplay() {
-      const v = sel.value;
-      if (!v) return;
-      disp.textContent = v;
+    // Local dropdowns: allow a per-row custom value.
+    const customInput = isLocal ? document.createElement("input") : null;
+    if (customInput) {
+      customInput.type = "text";
+      customInput.className = "field input";
+      customInput.style.textAlign = align;
+      setScaledFont(customInput, def.font || 12);
+      customInput.style.display = "none";
+      wrap.appendChild(customInput);
+    }
+
+    function showSelect() {
+      disp.style.display = "none";
+      if (customInput) customInput.style.display = "none";
+      sel.style.display = "";
+      if (arrowEl) arrowEl.style.display = "";
+    }
+
+    function showDisplay(text) {
+      disp.textContent = text;
       sel.style.display = "none";
+      if (arrowEl) arrowEl.style.display = "none";
+      if (customInput) customInput.style.display = "none";
       disp.style.display = "flex";
     }
 
-    function toSelect() {
+    function openCustomEditor() {
+      if (!customInput) return;
+      sel.style.display = "none";
+      if (arrowEl) arrowEl.style.display = "none";
       disp.style.display = "none";
-      sel.style.display = "";
+      customInput.style.display = "";
+      customInput.value = sel.dataset.customValue || "";
+      customInput.focus();
+      customInput.select?.();
+    }
+
+    function commitCustom() {
+      if (!customInput) return;
+      const v = (customInput.value || "").trim();
+      if (!v) {
+        sel.value = "";
+        showSelect();
+        return;
+      }
+      sel.dataset.customValue = v;
+
+      // Ensure the select contains the custom option so the value is preserved for export.
+      let opt = Array.from(sel.options).find((o) => o.value === v);
+      if (!opt) {
+        opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        const other = Array.from(sel.options).find((o) => o.value === "__OTHER__");
+        if (other) sel.add(opt, other);
+        else sel.add(opt);
+      }
+      sel.value = v;
+      showDisplay(v);
+    }
+
+    if (customInput) {
+      customInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commitCustom();
+        }
+      });
+      customInput.addEventListener("blur", () => {
+        if (customInput.style.display !== "none") commitCustom();
+      });
+    }
+
+    function toDisplay() {
+      const v = sel.value;
+      if (!v) return;
+      if (isLocal && v === "__OTHER__") {
+        openCustomEditor();
+        return;
+      }
+      showDisplay(v);
+    }
+
+    function toSelect() {
+      showSelect();
       sel.focus();
     }
 
@@ -670,6 +992,7 @@ function createChoiceField(def, page) {
         disp.textContent = "";
         disp.style.display = "none";
         sel.style.display = "";
+        if (arrowEl) arrowEl.style.display = "";
         return;
       }
       // Hide the dropdown arrow immediately after a selection is made
@@ -689,7 +1012,7 @@ function createChoiceField(def, page) {
     page.appendChild(wrap);
 
     elByName.set(def.name, sel);
-    choiceToggleByName.set(def.name, { selectEl: sel, displayEl: disp });
+    choiceToggleByName.set(def.name, { selectEl: sel, displayEl: disp, arrowEl, customEl: customInput });
     return;
   }
 
@@ -717,7 +1040,7 @@ function createTextField(def, page) {
   const wrap = makeFieldWrapper(def);
 
   // Signature (Option B): drawn signature pad
-  if (def.name === "Signature4") {
+  if (def.signature || def.name === "Signature4") {
     createSignaturePad(def, page);
     return;
   }
@@ -816,6 +1139,12 @@ function resetForm() {
 
     obj.selectEl.value = "";
     obj.selectEl.style.display = "";
+    if (obj.arrowEl) obj.arrowEl.style.display = "";
+    if (obj.customEl) {
+      obj.customEl.value = "";
+      obj.customEl.style.display = "none";
+    }
+    delete obj.selectEl.dataset.customValue;
     obj.displayEl.textContent = "";
     obj.displayEl.style.display = "none";
   }
@@ -832,7 +1161,7 @@ function resetForm() {
 
   // Restore default dates to today (matches initial page state)
   const todayIso = new Date().toISOString().slice(0, 10);
-  for (const nm of ["Date", "Date3_af_date"]) {
+  for (const nm of ["Date", "Date3_af_date", "Date3_p2_af_date"]) {
     const el = elByName.get(nm);
     if (el && !PRESERVE_ON_RESET.has(nm)) el.value = todayIso;
   }
@@ -856,33 +1185,6 @@ async function exportPdf() {
 
   const W = DESIGN.bgWidthPx;
   const H = DESIGN.bgHeightPx;
-
-  // Prepare a high-res canvas at the original background size (2x)
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-
-  // Draw background
-  const bg = document.getElementById("bg");
-  await new Promise((resolve) => {
-    if (bg && bg.complete && bg.naturalWidth) return resolve();
-    if (!bg) return resolve();
-    bg.addEventListener("load", resolve, { once: true });
-    bg.addEventListener("error", resolve, { once: true });
-  });
-  if (bg && bg.naturalWidth) ctx.drawImage(bg, 0, 0, W, H);
-
-  ctx.fillStyle = "#000";
-  ctx.textBaseline = "middle";
-
-  function pctToPxRect(r) {
-    const x = (r.left / 100) * W;
-    const y = (r.top / 100) * H;
-    const w = (r.width / 100) * W;
-    const h = (r.height / 100) * H;
-    return { x, y, w, h };
-  }
 
   function formatIsoDate(iso) {
     if (!iso) return "";
@@ -909,151 +1211,196 @@ async function exportPdf() {
     return "";
   }
 
-  function drawClippedText(text, rect, alignQ, fontPx, bold, wrap) {
-    const { x, y, w, h } = rect;
-    const pad = Math.max(2, Math.floor(h * 0.08));
-    const availW = Math.max(1, w - pad * 2);
-    const availH = Math.max(1, h - pad * 2);
+  async function renderPageToPng(bgEl, defs) {
+    // Prepare a high-res canvas at the original background size (2x)
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
 
-    // Clip to the field box so text never bleeds into adjacent cells
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(x, y, w, h);
-    ctx.clip();
+    // Wait for background
+    await new Promise((resolve) => {
+      if (bgEl && bgEl.complete && bgEl.naturalWidth) return resolve();
+      if (!bgEl) return resolve();
+      bgEl.addEventListener("load", resolve, { once: true });
+      bgEl.addEventListener("error", resolve, { once: true });
+    });
 
-    const align = alignFromQ(alignQ);
-    ctx.textAlign = align;
+    // Draw background
+    if (bgEl && bgEl.naturalWidth) ctx.drawImage(bgEl, 0, 0, W, H);
 
-    const weight = bold ? "700" : "400";
-    let px = Math.max(10, Math.floor(fontPx));
+    ctx.fillStyle = "#000";
+    ctx.textBaseline = "middle";
 
-    // For single-line fields, shrink to fit width (prevents Project from cutting off)
-    if (!wrap) {
+    function pctToPxRect(r) {
+      const x = (r.left / 100) * W;
+      const y = (r.top / 100) * H;
+      const w = (r.width / 100) * W;
+      const h = (r.height / 100) * H;
+      return { x, y, w, h };
+    }
+
+    function drawClippedText(text, rect, alignQ, fontPx, bold, wrap) {
+      const { x, y, w, h } = rect;
+      const pad = Math.max(2, Math.floor(h * 0.08));
+      const availW = Math.max(1, w - pad * 2);
+      const availH = Math.max(1, h - pad * 2);
+
+      // Clip to the field box so text never bleeds into adjacent cells
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+
+      const align = alignFromQ(alignQ);
+      ctx.textAlign = align;
+
+      const weight = bold ? "700" : "400";
+      let px = Math.max(10, Math.floor(fontPx));
+
+      // For single-line fields, shrink to fit width (prevents Project from cutting off)
+      if (!wrap) {
+        ctx.font = `${weight} ${px}px Arial, Helvetica, sans-serif`;
+        const measured = ctx.measureText(text).width;
+        if (measured > availW) {
+          const ratio = availW / measured;
+          px = Math.max(10, Math.floor(px * ratio));
+        }
+      }
+
       ctx.font = `${weight} ${px}px Arial, Helvetica, sans-serif`;
-      const measured = ctx.measureText(text).width;
-      if (measured > availW) {
-        const ratio = availW / measured;
-        px = Math.max(10, Math.floor(px * ratio));
+
+      const tx = align === "left" ? (x + pad) : (align === "right" ? (x + w - pad) : (x + w / 2));
+
+      if (!wrap) {
+        const ty = y + h / 2;
+        ctx.fillText(text, tx, ty);
+        ctx.restore();
+        return;
       }
-    }
 
-    ctx.font = `${weight} ${px}px Arial, Helvetica, sans-serif`;
+      // Basic word-wrapping for multiline text areas
+      const lineH = Math.max(12, Math.floor(px * 1.15));
+      const words = String(text).replace(/\r/g, "").split(/\s+/).filter(Boolean);
+      const lines = [];
+      let line = "";
+      for (const word of words) {
+        const test = line ? (line + " " + word) : word;
+        const width = ctx.measureText(test).width;
+        if (width <= availW || !line) {
+          line = test;
+        } else {
+          lines.push(line);
+          line = word;
+        }
+      }
+      if (line) lines.push(line);
 
-    const tx = align === "left" ? (x + pad) : (align === "right" ? (x + w - pad) : (x + w / 2));
+      // Vertically start from top padding; do not overflow the box
+      let ty = y + pad + lineH / 2;
+      const maxY = y + pad + availH;
 
-    if (!wrap) {
-      const ty = y + h / 2;
-      ctx.fillText(text, tx, ty);
+      for (const ln of lines) {
+        if (ty > maxY) break;
+        ctx.fillText(ln, tx, ty);
+        ty += lineH;
+      }
+
       ctx.restore();
-      return;
     }
 
-    // Basic word-wrapping for multiline text areas
-    const lineH = Math.max(12, Math.floor(px * 1.15));
-    const words = String(text).replace(/\r/g, "").split(/\s+/).filter(Boolean);
-    const lines = [];
-    let line = "";
-    for (const word of words) {
-      const test = line ? (line + " " + word) : word;
-      const width = ctx.measureText(test).width;
-      if (width <= availW || !line) {
-        line = test;
-      } else {
-        lines.push(line);
-        line = word;
-      }
-    }
-    if (line) lines.push(line);
+    // Draw all non-signature fields
+    for (const def of defs) {
+      if (def.kind === "button") continue;
+      if (def.signature) continue;
+      if (def.kind === "text" && def.name === "Signature4") continue;
 
-    // Vertically start from top padding; do not overflow the box
-    let ty = y + pad + lineH / 2;
-    const maxY = y + pad + availH;
+      let v = getValueForDef(def);
+      if (!v) continue;
 
-    for (const ln of lines) {
-      if (ty > maxY) break;
-      ctx.fillText(ln, tx, ty);
-      ty += lineH;
-    }
-
-    ctx.restore();
-  }
-
-  // Draw all non-signature fields
-  for (const def of FIELD_DEFS) {
-    if (def.kind === "button") continue;
-    if (def.kind === "text" && def.name === "Signature4") continue;
-
-    let v = getValueForDef(def);
-    if (!v) continue;
-
-    // Export dates in a consistent MM/DD/YYYY format
-    if (def.kind === "text" && _isDateFieldName(def.name)) {
-      v = formatIsoDate(v);
-    }
-
-    const rect = pctToPxRect(def.rect);
-
-    // Font sizing rules for export
-    let fontPx;
-    let bold = false;
-    let wrap = false;
-
-    if (def.kind === "toggle" || def.kind === "choice") {
-      // Make dropdown values as big as possible without exceeding the box
-      fontPx = Math.min(52, Math.floor(rect.h * 0.85));
-      bold = true;
-    } else if (def.kind === "nolunch") {
-      fontPx = Math.min(52, Math.floor(rect.h * 0.85));
-      bold = true;
-    } else {
-      // Text fields: respect the PDF's intended font, with special handling for dates
-      let pt = def.font || 12;
-
-      // Narrative fields were requested 2pt smaller on screen; keep export consistent
-      if (def.name === "LocationDescription of workRow1" ||
-          def.name === "Additional NotesRow1" ||
-          def.name === "Safety Huddle TopicRow1") {
-        pt = Math.max(6, pt - 2);
+      // Export dates in a consistent MM/DD/YYYY format
+      if ((def.kind === "text") && _isDateFieldName(def.name)) {
+        v = formatIsoDate(v);
       }
 
-      // Date fields: larger and bold so they remain readable in the saved PDF
-      if (_isDateFieldName(def.name)) {
-        fontPx = Math.min(60, Math.floor(rect.h * 0.85));
+      const rect = pctToPxRect(def.rect);
+
+      // Font sizing rules for export
+      let fontPx;
+      let bold = false;
+      let wrap = false;
+
+      if (def.kind === "toggle" || def.kind === "choice") {
+        // Make dropdown values as big as possible without exceeding the box
+        fontPx = Math.min(52, Math.floor(rect.h * 0.85));
+        bold = true;
+      } else if (def.kind === "nolunch") {
+        fontPx = Math.min(52, Math.floor(rect.h * 0.85));
         bold = true;
       } else {
-        fontPx = pt * DESIGN.pxPerPtAtDesign;
+        // Text fields: respect the PDF's intended font, with special handling for dates
+        let pt = def.font || 12;
+
+        // Narrative fields were requested 2pt smaller on screen; keep export consistent
+        if (def.name === "LocationDescription of workRow1" ||
+            def.name === "Additional NotesRow1" ||
+            def.name === "Safety Huddle TopicRow1") {
+          pt = Math.max(6, pt - 2);
+        }
+
+        // Date fields: larger and bold so they remain readable in the saved PDF
+        if (_isDateFieldName(def.name)) {
+          fontPx = Math.min(60, Math.floor(rect.h * 0.85));
+          bold = true;
+        } else {
+          fontPx = pt * DESIGN.pxPerPtAtDesign;
+        }
+
+        wrap = !!def.multiline;
       }
 
-      wrap = !!def.multiline;
+      drawClippedText(v, rect, def.align, fontPx, bold, wrap);
     }
 
-    drawClippedText(v, rect, def.align, fontPx, bold, wrap);
+    // Draw signatures for any signature fields on this page
+    const sigDefs = defs.filter((d) => d.signature || (d.kind === 'text' && d.name === 'Signature4'));
+    for (const sigDef of sigDefs) {
+      const group = sigDef.sigGroup || sigDef.name;
+      const dataUrl = sigGroupData.get(group);
+      if (!dataUrl) continue;
+
+      const rect = pctToPxRect(sigDef.rect);
+      await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(rect.x, rect.y, rect.w, rect.h);
+          ctx.clip();
+          ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
+          ctx.restore();
+          resolve();
+        };
+        img.onerror = resolve;
+        img.src = dataUrl;
+      });
+    }
+
+    return canvas.toDataURL("image/png");
   }
 
-  // Draw signature (Option B)
-  const sigDef = FIELD_DEFS.find(d => d.kind === "text" && d.name === "Signature4");
-  const sigPad = sigPads.get("Signature4");
-  if (sigDef && sigPad && sigPad.dataUrl) {
-    const rect = pctToPxRect(sigDef.rect);
-    await new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(rect.x, rect.y, rect.w, rect.h);
-        ctx.clip();
-        ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h);
-        ctx.restore();
-        resolve();
-      };
-      img.onerror = resolve;
-      img.src = sigPad.dataUrl;
-    });
-  }
+  // Page 1
+  const bg1 = document.getElementById("bg");
+  const imgData1 = await renderPageToPng(bg1, FIELD_DEFS);
+  pdf.addImage(imgData1, "PNG", 0, 0, 612, 792);
 
-  // Create PDF (single page)
-  const imgData = canvas.toDataURL("image/png");
-  pdf.addImage(imgData, "PNG", 0, 0, 612, 792);
+  // Optional Page 2
+  const bg2 = document.getElementById("bg2");
+  if (extraPageAdded && bg2 && extraPageDefs.length) {
+    pdf.addPage("letter", "portrait");
+    const imgData2 = await renderPageToPng(bg2, extraPageDefs);
+    pdf.addImage(imgData2, "PNG", 0, 0, 612, 792);
+  }
 
   // Filename: DWL_YYYY-MM-DD.pdf (uses Report Date if present)
   const dateIso = (elByName.get("Date")?.value || "").toString();
@@ -1107,13 +1454,30 @@ function applyData(data) {
     const ct = choiceToggleByName.get(name);
     if (ct) {
       if (v) {
+        // Ensure the option exists (needed for Local custom values)
+        if (ct.selectEl && ct.selectEl.tagName === 'SELECT') {
+          const hasOpt = Array.from(ct.selectEl.options).some((o) => o.value === v);
+          if (!hasOpt) {
+            const opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v;
+            const other = Array.from(ct.selectEl.options).find((o) => o.value === '__OTHER__');
+            if (other) ct.selectEl.add(opt, other);
+            else ct.selectEl.add(opt);
+          }
+        }
         ct.displayEl.textContent = v;
         ct.selectEl.style.display = "none";
+        if (ct.arrowEl) ct.arrowEl.style.display = "none";
+        if (ct.customEl) ct.customEl.style.display = "none";
         ct.displayEl.style.display = "flex";
       } else {
         ct.displayEl.textContent = "";
         ct.displayEl.style.display = "none";
         ct.selectEl.style.display = "";
+        if (ct.arrowEl) ct.arrowEl.style.display = "";
+        if (ct.customEl) ct.customEl.style.display = "none";
+        delete ct.selectEl.dataset.customValue;
       }
     }
   }
@@ -1174,6 +1538,8 @@ function init() {
   document.getElementById("printPdf").addEventListener("click", () => {
     exportPdf();
   });
+  const addBtn = document.getElementById("addPageBtn");
+  if (addBtn) addBtn.addEventListener("click", addAdditionalPage);
 
   // Ensure fonts are scaled correctly for printing
   window.addEventListener("beforeprint", applyScale);
