@@ -909,7 +909,30 @@ function createChoiceField(def, page) {
       wrap.appendChild(customInput);
     }
 
+    // Keep Local custom editor open until the user taps another field.
+    let _customOutsideHandler = null;
+    function _detachCustomOutsideHandler() {
+      if (!_customOutsideHandler) return;
+      document.removeEventListener("touchstart", _customOutsideHandler, true);
+      document.removeEventListener("mousedown", _customOutsideHandler, true);
+      document.removeEventListener("pointerdown", _customOutsideHandler, true);
+      _customOutsideHandler = null;
+    }
+    function _attachCustomOutsideHandler() {
+      _detachCustomOutsideHandler();
+      _customOutsideHandler = (e) => {
+        if (!customInput || customInput.style.display === "none") return;
+        // Ignore taps inside the editor
+        if (e.target === customInput || (customInput.contains && customInput.contains(e.target))) return;
+        commitCustom();
+      };
+      document.addEventListener("touchstart", _customOutsideHandler, true);
+      document.addEventListener("mousedown", _customOutsideHandler, true);
+      document.addEventListener("pointerdown", _customOutsideHandler, true);
+    }
+
     function showSelect() {
+      if (customInput) _detachCustomOutsideHandler();
       disp.style.display = "none";
       if (customInput) customInput.style.display = "none";
       sel.style.display = "";
@@ -917,6 +940,7 @@ function createChoiceField(def, page) {
     }
 
     function showDisplay(text) {
+      if (customInput) _detachCustomOutsideHandler();
       disp.textContent = text;
       sel.style.display = "none";
       if (arrowEl) arrowEl.style.display = "none";
@@ -931,12 +955,25 @@ function createChoiceField(def, page) {
       disp.style.display = "none";
       customInput.style.display = "";
       customInput.value = sel.dataset.customValue || "";
-      customInput.focus();
-      customInput.select?.();
+
+      // iOS: focusing immediately after a <select> change can be unstable.
+      // Defer focus until after the picker closes.
+      setTimeout(() => {
+        try {
+          customInput.focus();
+          customInput.select?.();
+        } catch (_) {}
+      }, 0);
+
+      // Keep editor open until the user taps another field.
+      setTimeout(() => {
+        try { _attachCustomOutsideHandler(); } catch (_) {}
+      }, 0);
     }
 
     function commitCustom() {
       if (!customInput) return;
+      _detachCustomOutsideHandler();
       const v = (customInput.value || "").trim();
       if (!v) {
         sel.value = "";
@@ -965,9 +1002,6 @@ function createChoiceField(def, page) {
           e.preventDefault();
           commitCustom();
         }
-      });
-      customInput.addEventListener("blur", () => {
-        if (customInput.style.display !== "none") commitCustom();
       });
     }
 
@@ -1402,10 +1436,48 @@ async function exportPdf() {
     pdf.addImage(imgData2, "PNG", 0, 0, 612, 792);
   }
 
-  // Filename: DWL_YYYY-MM-DD.pdf (uses Report Date if present)
+  // Filename: DWL_<Project>_<MM.DD.YY>_<Shift>.pdf
+  // Example: DWL_69th_St._Transfer_Bridge_03.10.26_Day.pdf
+  function _safeFilenamePart(s, maxLen = 48) {
+    const cleaned = String(s || "")
+      .replace(/[\\\/:*?"<>|]/g, "")     // illegal on Windows
+      .replace(/\s+/g, " ")
+      .trim();
+    const underscored = cleaned.replace(/\s/g, "_");
+    return underscored.slice(0, maxLen);
+  }
+
+  function _selectLabel(name) {
+    const el = elByName.get(name);
+    if (!el) return "";
+    const tag = (el.tagName || "").toUpperCase();
+    if (tag === "SELECT") {
+      const opt = el.options?.[el.selectedIndex];
+      return (opt?.textContent || el.value || "").toString().trim();
+    }
+    return (el.value || "").toString().trim();
+  }
+
+  function _dateIsoToFilePart(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "").trim());
+    if (!m) return "";
+    const yy = m[1].slice(2);
+    return `${m[2]}.${m[3]}.${yy}`;
+  }
+
+  const projectLabel = _selectLabel("Project");
+  const shiftLabel = _selectLabel("Shift");
+  const shiftWord = (shiftLabel.split(/\s+/).filter(Boolean)[0] || "");
+
   const dateIso = (elByName.get("Date")?.value || "").toString();
-  const safeDate = (dateIso || new Date().toISOString().slice(0, 10)).replace(/[^\d-]/g, "");
-  pdf.save(`DWL_${safeDate}.pdf`);
+  const datePart = _dateIsoToFilePart(dateIso) || _dateIsoToFilePart(new Date().toISOString().slice(0, 10));
+
+  const parts = ["DWL"];
+  if (projectLabel) parts.push(_safeFilenamePart(projectLabel));
+  if (datePart) parts.push(datePart);
+  if (shiftWord) parts.push(_safeFilenamePart(shiftWord, 16));
+
+  pdf.save(parts.join("_") + ".pdf");
 }
 
 function collectData() {
