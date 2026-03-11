@@ -101,6 +101,22 @@ body{
   font-weight: 700 !important;
   font-synthesis: weight;
 }
+/* Employee name dropdowns: show a clear arrow on phones (some mobile browsers hide the native arrow
+   when selects are borderless/transparent). We draw our own arrow via background gradients. */
+.field.select.employee-select{
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 18px;
+  background-color: rgba(255,255,255,0.001);
+  background-image:
+    linear-gradient(45deg, transparent 50%, #000 50%),
+    linear-gradient(135deg, #000 50%, transparent 50%);
+  background-position:
+    calc(100% - 10px) 50%,
+    calc(100% - 6px) 50%;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
 
 /* Some browsers ignore styling on <option>, but this helps where supported */
 .field.select option{

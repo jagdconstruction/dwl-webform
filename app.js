@@ -70,6 +70,12 @@ for (const def of FIELD_DEFS) {
   }
 }
 
+// Right-align time-entry dropdowns (Straight/Over/P.T./R.T.) on screen and in export.
+for (const def of FIELD_DEFS) {
+  if (def.kind === "toggle") def.align = 2;
+}
+
+
 
 
 // Reset exclusions (do not clear these on Reset)
@@ -777,6 +783,8 @@ function createToggleField(def, page) {
   disp.setAttribute("role", "button");
   disp.dataset.name = def.txtName;
   disp.style.textAlign = alignFromQ(def.align);
+  // Align the displayed value inside the flex box (needed for right-aligned time values)
+  disp.style.justifyContent = (def.align === 2 ? "flex-end" : (def.align === 1 ? "center" : "flex-start"));
   setScaledFont(disp, def.fontText || (def.fontSelect || 12) + 2);
   disp.style.fontWeight = '700';
 
@@ -874,18 +882,13 @@ function createChoiceField(def, page) {
       sel.appendChild(optEl);
     }
 
-    // Employee dropdowns: native arrows are inconsistent on phones.
-    // Force-hide the native arrow and draw a clear arrow icon.
-    let arrowEl = null;
-    if (isEmployee) {
-      sel.style.appearance = "none";
-      sel.style.webkitAppearance = "none";
-      sel.style.paddingRight = "18px";
-      arrowEl = document.createElement("div");
-      arrowEl.className = "select-arrow";
-      arrowEl.textContent = "▼";
-      wrap.appendChild(arrowEl);
-    }
+
+// Employee dropdowns: force a visible arrow (consistent on phones).
+// (We keep the native <select> behavior, but draw our own arrow via CSS.)
+let arrowEl = null;
+if (isEmployee) {
+  sel.classList.add("employee-select");
+}
 
     const disp = document.createElement("div");
     disp.className = "field toggle-txt";
@@ -893,6 +896,7 @@ function createChoiceField(def, page) {
     disp.setAttribute("role", "button");
     disp.dataset.name = def.name + "__TXT";
     disp.style.textAlign = align;
+    disp.style.justifyContent = (align === "right" ? "flex-end" : (align === "center" ? "center" : "flex-start"));
     setScaledFont(disp, (def.font || 12) + 2);
 
     // initial state: show dropdown, hide big text
@@ -909,101 +913,74 @@ function createChoiceField(def, page) {
       wrap.appendChild(customInput);
     }
 
-    // Keep Local custom editor open until the user taps another field.
-    let _customOutsideHandler = null;
-    function _detachCustomOutsideHandler() {
-      if (!_customOutsideHandler) return;
-      document.removeEventListener("touchstart", _customOutsideHandler, true);
-      document.removeEventListener("mousedown", _customOutsideHandler, true);
-      document.removeEventListener("pointerdown", _customOutsideHandler, true);
-      _customOutsideHandler = null;
+// Local dropdowns: keep custom editor open until the user taps another field (blur).
+function showSelect() {
+  disp.style.display = "none";
+  if (customInput) customInput.style.display = "none";
+  sel.style.display = "";
+  if (arrowEl) arrowEl.style.display = "";
+}
+
+function showDisplay(text) {
+  disp.textContent = text;
+  sel.style.display = "none";
+  if (arrowEl) arrowEl.style.display = "none";
+  if (customInput) customInput.style.display = "none";
+  disp.style.display = "flex";
+}
+
+function openCustomEditor() {
+  if (!customInput) return;
+  sel.style.display = "none";
+  if (arrowEl) arrowEl.style.display = "none";
+  disp.style.display = "none";
+  customInput.style.display = "";
+  customInput.value = sel.dataset.customValue || "";
+
+  // Focus immediately (keeps typing available until they tap another field)
+  try {
+    customInput.focus();
+    if (customInput.select) customInput.select();
+  } catch (_) {}
+}
+
+function commitCustom() {
+  if (!customInput) return;
+  const v = (customInput.value || "").trim();
+  if (!v) {
+    sel.value = "";
+    delete sel.dataset.customValue;
+    showSelect();
+    return;
+  }
+  sel.dataset.customValue = v;
+
+  // Ensure the select contains the custom option so the value is preserved for export.
+  let opt = Array.from(sel.options).find((o) => o.value === v);
+  if (!opt) {
+    opt = document.createElement("option");
+    opt.value = v;
+    opt.textContent = v;
+    const other = Array.from(sel.options).find((o) => o.value === "__OTHER__");
+    if (other) sel.add(opt, other);
+    else sel.add(opt);
+  }
+  sel.value = v;
+  showDisplay(v);
+}
+
+if (customInput) {
+  customInput.addEventListener("blur", () => {
+    // Commit when the user taps another field
+    commitCustom();
+  });
+  customInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitCustom();
     }
-    function _attachCustomOutsideHandler() {
-      _detachCustomOutsideHandler();
-      _customOutsideHandler = (e) => {
-        if (!customInput || customInput.style.display === "none") return;
-        // Ignore taps inside the editor
-        if (e.target === customInput || (customInput.contains && customInput.contains(e.target))) return;
-        commitCustom();
-      };
-      document.addEventListener("touchstart", _customOutsideHandler, true);
-      document.addEventListener("mousedown", _customOutsideHandler, true);
-      document.addEventListener("pointerdown", _customOutsideHandler, true);
-    }
-
-    function showSelect() {
-      if (customInput) _detachCustomOutsideHandler();
-      disp.style.display = "none";
-      if (customInput) customInput.style.display = "none";
-      sel.style.display = "";
-      if (arrowEl) arrowEl.style.display = "";
-    }
-
-    function showDisplay(text) {
-      if (customInput) _detachCustomOutsideHandler();
-      disp.textContent = text;
-      sel.style.display = "none";
-      if (arrowEl) arrowEl.style.display = "none";
-      if (customInput) customInput.style.display = "none";
-      disp.style.display = "flex";
-    }
-
-    function openCustomEditor() {
-      if (!customInput) return;
-      sel.style.display = "none";
-      if (arrowEl) arrowEl.style.display = "none";
-      disp.style.display = "none";
-      customInput.style.display = "";
-      customInput.value = sel.dataset.customValue || "";
-
-      // iOS: focusing immediately after a <select> change can be unstable.
-      // Defer focus until after the picker closes.
-      setTimeout(() => {
-        try {
-          customInput.focus();
-          customInput.select?.();
-        } catch (_) {}
-      }, 0);
-
-      // Keep editor open until the user taps another field.
-      setTimeout(() => {
-        try { _attachCustomOutsideHandler(); } catch (_) {}
-      }, 0);
-    }
-
-    function commitCustom() {
-      if (!customInput) return;
-      _detachCustomOutsideHandler();
-      const v = (customInput.value || "").trim();
-      if (!v) {
-        sel.value = "";
-        showSelect();
-        return;
-      }
-      sel.dataset.customValue = v;
-
-      // Ensure the select contains the custom option so the value is preserved for export.
-      let opt = Array.from(sel.options).find((o) => o.value === v);
-      if (!opt) {
-        opt = document.createElement("option");
-        opt.value = v;
-        opt.textContent = v;
-        const other = Array.from(sel.options).find((o) => o.value === "__OTHER__");
-        if (other) sel.add(opt, other);
-        else sel.add(opt);
-      }
-      sel.value = v;
-      showDisplay(v);
-    }
-
-    if (customInput) {
-      customInput.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commitCustom();
-        }
-      });
-    }
+  });
+}
 
     function toDisplay() {
       const v = sel.value;
@@ -1441,6 +1418,7 @@ async function exportPdf() {
   function _safeFilenamePart(s, maxLen = 120) {
     const cleaned = String(s || "")
       .replace(/[\\/:*?"<>|]/g, "")     // illegal on Windows
+      .replace(/_/g, " ")
       .replace(/\s+/g, " ")
       .trim();
     return cleaned.slice(0, maxLen);
