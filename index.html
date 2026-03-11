@@ -4,13 +4,19 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>DWL 3.0 Web Form</title>
-  <link rel="stylesheet" href="style.css?v=1.5"/>
+  <link rel="stylesheet" href="style.css?v=1.6"/>
 </head>
 <body>
   <div class="toolbar">
     <button id="resetTop" type="button">Reset</button>
     <button id="printPdf" type="button">Print / Save PDF</button>
     <span style="margin-left:auto; font-size:12px; opacity:0.7;">DWL 3.0 (web overlay)</span>
+  </div>
+
+  <div class="crewbar">
+    <button id="uploadCrewBtn" type="button">Upload Crew</button>
+    <button id="loadCrewBtn" type="button">Load Last Crew</button>
+    <span class="crewbar-note">Paste a crew list (one name per line). Employee names + Class + Local are remembered on this device.</span>
   </div>
 
   <div class="canvas">
@@ -21,11 +27,11 @@
   </div>
 
   <div class="bottom-actions">
-    <button id="addPageBtn" type="button">Add Additional Page</button>
+    <button id="addPageBtn" type="button">Add 2nd Page</button>
   </div>
 
   <!-- Used for consistent one-page PDF output across phone/desktop -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/3.0.3/jspdf.umd.min.js"></script>
-  <script src="app.js?v=1.5"></script>
+  <script src="app.js?v=1.6"></script>
 </body>
 </html>

@@ -79,9 +79,12 @@ for (const def of FIELD_DEFS) {
 
 
 // Reset exclusions (do not clear these on Reset)
+// Per request: preserve Project + Employee + Class + Local.
 const PRESERVE_ON_RESET = new Set(["Project"]);
 for (const def of FIELD_DEFS) {
-  if (def.kind === "choice" && String(def.name || "").startsWith("Dropdown1.")) {
+  if (def.kind !== "choice") continue;
+  const n = String(def.name || "");
+  if (n.startsWith("Dropdown1.") || n.startsWith("Class_DD_") || n.startsWith("Local_DD_")) {
     PRESERVE_ON_RESET.add(def.name);
   }
 }
@@ -90,7 +93,6 @@ for (const def of FIELD_DEFS) {
 function _shouldHideArrowAfterPick(name) {
   const n = String(name || "");
   return (
-    n.startsWith("Dropdown1.") ||   // Employee column (20 rows)
     n.startsWith("Activity_DD_") || // Activity column (20 rows)
     n.startsWith("Class_DD_") ||    // Class column (20 rows)
     n.startsWith("Local_DD_")       // Local column (20 rows)
@@ -337,9 +339,11 @@ function addAdditionalPage() {
     }
   }
 
-  // Preserve employee names on reset (same behavior as page 1)
+  // Preserve employee names, class, and local on reset (same behavior as page 1)
   for (const def of extraPageDefs) {
-    if (def.kind === 'choice' && def.name.startsWith('Dropdown1.')) {
+    if (def.kind !== 'choice') continue;
+    const n = String(def.name || '');
+    if (n.startsWith('Dropdown1.') || n.startsWith('Class_DD_') || n.startsWith('Local_DD_')) {
       PRESERVE_ON_RESET.add(def.name);
     }
   }
@@ -355,7 +359,7 @@ function addAdditionalPage() {
   const addBtn = document.getElementById('addPageBtn');
   if (addBtn) {
     addBtn.disabled = true;
-    addBtn.textContent = 'Additional Page Added';
+    addBtn.textContent = '2nd Page Added';
   }
 }
 
@@ -869,6 +873,37 @@ function createChoiceField(def, page) {
   const isEmployee = def.name.startsWith("Dropdown1.");
   const isLocal = def.name.startsWith("Local_DD_");
 
+  // Employee list is now free-text (no dropdown) so crews can be pasted/remembered.
+  if (isEmployee) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "field input employee-input";
+    input.id = sanitizeId(def.name);
+    input.name = def.name;
+    input.style.textAlign = align;
+    setScaledFont(input, def.font || 12);
+    input.style.fontWeight = '700';
+
+    const m = /^(?:Dropdown1\.0\.)(\d+)$/.exec(def.name);
+    const rowIdx = m ? parseInt(m[1], 10) : null;
+
+    // Auto-save crew snapshot when a name changes
+    input.addEventListener('input', scheduleSaveCrew);
+    input.addEventListener('change', () => {
+      if (rowIdx !== null) _applyPrefsToRow(rowIdx);
+      scheduleSaveCrew();
+    });
+    input.addEventListener('blur', () => {
+      if (rowIdx !== null) _applyPrefsToRow(rowIdx);
+      scheduleSaveCrew();
+    });
+
+    wrap.appendChild(input);
+    page.appendChild(wrap);
+    elByName.set(def.name, input);
+    return;
+  }
+
   if (def.editable) {
     // Editable combo box -> input + datalist
     const input = document.createElement("input");
@@ -1017,6 +1052,9 @@ function commitCustom() {
   }
   sel.value = v;
   showDisplay(v);
+
+  // Local custom values are part of crew memory
+  scheduleSaveCrew();
 }
 
 if (customInput) {
@@ -1057,10 +1095,19 @@ if (customInput) {
         disp.style.display = "none";
         sel.style.display = "";
         if (arrowEl) arrowEl.style.display = "";
+
+        if (def.name.startsWith('Class_DD_') || def.name.startsWith('Local_DD_')) {
+          scheduleSaveCrew();
+        }
         return;
       }
       // Hide the dropdown arrow immediately after a selection is made
       toDisplay();
+
+      // Crew memory (Class/Local only; Activity is intentionally not remembered)
+      if ((def.name.startsWith('Class_DD_') || def.name.startsWith('Local_DD_')) && (!isLocal || v !== '__OTHER__')) {
+        scheduleSaveCrew();
+      }
     });
 
     disp.addEventListener("click", toSelect);
@@ -1232,6 +1279,363 @@ function resetForm() {
     const el = elByName.get(nm);
     if (el && !PRESERVE_ON_RESET.has(nm)) el.value = todayIso;
   }
+}
+
+// ------------------------------------------------------------
+// Crew memory (Employee + Class + Local)
+// ------------------------------------------------------------
+
+const CREW_LAST_KEY = "DWL_LAST_CREW_V1";
+const CREW_PREFS_KEY = "DWL_EMP_PREFS_V1";
+
+let _crewSaveTimer = null;
+let _pendingCrewNames = null; // used by the Upload Crew modal when >20 names are pasted
+
+function _safeLSGet(key) {
+  try { return window.localStorage.getItem(key); } catch (_) { return null; }
+}
+
+function _safeLSSet(key, value) {
+  try { window.localStorage.setItem(key, value); } catch (_) {}
+}
+
+function _normNameKey(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function _rowFieldNames(idx) {
+  return {
+    emp: `Dropdown1.0.${idx}`,
+    cls: `Class_DD_1.${idx}`,
+    loc: `Local_DD_1.${idx}`,
+  };
+}
+
+function _getVal(name) {
+  const el = elByName.get(name);
+  return (el && ("value" in el)) ? String(el.value || "") : "";
+}
+
+function _setChoiceValue(fieldName, value) {
+  const v = String(value || "");
+  const ct = choiceToggleByName.get(fieldName);
+  const el = ct?.selectEl || elByName.get(fieldName);
+  if (!el) return;
+
+  // Ensure option exists for Local custom values
+  if (el.tagName === 'SELECT' && v) {
+    const hasOpt = Array.from(el.options).some((o) => o.value === v);
+    if (!hasOpt) {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      const other = Array.from(el.options).find((o) => o.value === '__OTHER__');
+      if (other) el.add(opt, other);
+      else el.add(opt);
+    }
+  }
+
+  el.value = v;
+
+  // Keep the hide-arrow dropdown UI in sync
+  if (ct) {
+    if (v) {
+      if (fieldName.startsWith('Local_DD_')) ct.selectEl.dataset.customValue = v;
+      ct.displayEl.textContent = v;
+      ct.selectEl.style.display = 'none';
+      if (ct.arrowEl) ct.arrowEl.style.display = 'none';
+      if (ct.customEl) ct.customEl.style.display = 'none';
+      ct.displayEl.style.display = 'flex';
+    } else {
+      ct.displayEl.textContent = '';
+      ct.displayEl.style.display = 'none';
+      ct.selectEl.style.display = '';
+      if (ct.arrowEl) ct.arrowEl.style.display = '';
+      if (ct.customEl) ct.customEl.style.display = 'none';
+      delete ct.selectEl.dataset.customValue;
+    }
+  }
+}
+
+function _collectCrewSnapshot() {
+  const rows = [];
+  let usesPage2 = false;
+
+  const max = extraPageAdded ? 50 : 20;
+  for (let i = 0; i < max; i++) {
+    const { emp, cls, loc } = _rowFieldNames(i);
+    const row = {
+      name: _getVal(emp),
+      classVal: _getVal(cls),
+      localVal: _getVal(loc),
+    };
+    rows.push(row);
+    if (i >= 20 && (row.name || row.classVal || row.localVal)) usesPage2 = true;
+  }
+
+  return {
+    version: 1,
+    usesPage2,
+    rows,
+    savedAt: new Date().toISOString(),
+  };
+}
+
+function _updateEmployeePrefsFromSnapshot(snap) {
+  if (!snap || !Array.isArray(snap.rows)) return;
+  let prefs = {};
+  try {
+    const raw = _safeLSGet(CREW_PREFS_KEY);
+    prefs = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    prefs = {};
+  }
+
+  for (const r of snap.rows) {
+    const key = _normNameKey(r?.name);
+    if (!key) continue;
+    prefs[key] = prefs[key] || {};
+    if (r.classVal) prefs[key].classVal = r.classVal;
+    if (r.localVal) prefs[key].localVal = r.localVal;
+  }
+
+  _safeLSSet(CREW_PREFS_KEY, JSON.stringify(prefs));
+}
+
+function _applyPrefsToRow(idx) {
+  const { emp, cls, loc } = _rowFieldNames(idx);
+  const name = _getVal(emp);
+  const key = _normNameKey(name);
+  if (!key) return;
+
+  let prefs = null;
+  try {
+    const raw = _safeLSGet(CREW_PREFS_KEY);
+    prefs = raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    prefs = null;
+  }
+  if (!prefs || !prefs[key]) return;
+
+  const curClass = _getVal(cls);
+  const curLocal = _getVal(loc);
+  if (!curClass && prefs[key].classVal) _setChoiceValue(cls, prefs[key].classVal);
+  if (!curLocal && prefs[key].localVal) _setChoiceValue(loc, prefs[key].localVal);
+}
+
+function saveCrewNow() {
+  const snap = _collectCrewSnapshot();
+  _safeLSSet(CREW_LAST_KEY, JSON.stringify(snap));
+  _updateEmployeePrefsFromSnapshot(snap);
+}
+
+function scheduleSaveCrew() {
+  // Debounced to avoid excessive writes while typing.
+  if (_crewSaveTimer) clearTimeout(_crewSaveTimer);
+  _crewSaveTimer = setTimeout(() => {
+    _crewSaveTimer = null;
+    saveCrewNow();
+  }, 350);
+}
+
+function _parseCrewText(txt) {
+  const lines = String(txt || "").split(/\r?\n/);
+  const names = [];
+  for (let line of lines) {
+    line = String(line || "").trim();
+    if (!line) continue;
+    // Remove common bullets/numbering prefixes: "1) ", "1.", "- ", "• "
+    line = line.replace(/^\s*(?:[\-\*•]+\s*)+/, "");
+    line = line.replace(/^\s*\d+\s*[\)\.-]\s*/, "");
+    line = line.trim();
+    if (!line) continue;
+    names.push(line);
+  }
+  return names;
+}
+
+function _clearCrewFields() {
+  const max = extraPageAdded ? 50 : 20;
+  for (let i = 0; i < max; i++) {
+    const { emp, cls, loc } = _rowFieldNames(i);
+    const empEl = elByName.get(emp);
+    if (empEl) empEl.value = "";
+    _setChoiceValue(cls, "");
+    _setChoiceValue(loc, "");
+  }
+}
+
+function _fillCrewNames(names) {
+  const maxSlots = extraPageAdded ? 50 : 20;
+  const count = Math.min(names.length, maxSlots);
+
+  for (let i = 0; i < count; i++) {
+    const { emp } = _rowFieldNames(i);
+    const empEl = elByName.get(emp);
+    if (empEl) empEl.value = names[i];
+    _applyPrefsToRow(i);
+  }
+
+  // Save snapshot after filling
+  scheduleSaveCrew();
+}
+
+function loadLastCrew() {
+  let snap = null;
+  try {
+    const raw = _safeLSGet(CREW_LAST_KEY);
+    snap = raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    snap = null;
+  }
+  if (!snap || !Array.isArray(snap.rows)) {
+    alert("No saved crew found on this device yet.");
+    return;
+  }
+
+  if (snap.usesPage2 && !extraPageAdded) {
+    alert("Your last saved crew used 2 pages. Tap 'Add 2nd Page', then tap 'Load Last Crew' again.");
+    return;
+  }
+
+  // Load employees + class/local values exactly as last saved.
+  const names = [];
+  const max = Math.min(snap.rows.length, extraPageAdded ? 50 : 20);
+  for (let i = 0; i < max; i++) {
+    const r = snap.rows[i] || {};
+    const { emp, cls, loc } = _rowFieldNames(i);
+    const empEl = elByName.get(emp);
+    if (empEl) empEl.value = String(r.name || "");
+    _setChoiceValue(cls, r.classVal || "");
+    _setChoiceValue(loc, r.localVal || "");
+    _applyPrefsToRow(i);
+    names.push(String(r.name || ""));
+  }
+
+  scheduleSaveCrew();
+}
+
+function openCrewModal() {
+  ensureCrewModal();
+  const modal = document.getElementById('crewModal');
+  const ta = document.getElementById('crewText');
+  const hint = document.getElementById('crewHint');
+  if (!modal || !ta) return;
+  if (hint) hint.textContent = "One name per line. If you paste more than 20 names, add the 2nd page.";
+  modal.classList.add('open');
+  try { ta.focus(); } catch (_) {}
+}
+
+function closeCrewModal() {
+  const modal = document.getElementById('crewModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function ensureCrewModal() {
+  if (document.getElementById('crewModal')) return;
+
+  const modal = document.createElement('div');
+  modal.className = 'crew-modal';
+  modal.id = 'crewModal';
+
+  const box = document.createElement('div');
+  box.className = 'crew-modal-box';
+  modal.appendChild(box);
+
+  const title = document.createElement('div');
+  title.className = 'crew-modal-title';
+  title.textContent = 'Upload Crew (paste)';
+  box.appendChild(title);
+
+  const ta = document.createElement('textarea');
+  ta.id = 'crewText';
+  ta.className = 'crew-modal-text';
+  ta.placeholder = 'Example:\nLast, First\nLast, First\nLast, First';
+  box.appendChild(ta);
+
+  const hint = document.createElement('div');
+  hint.className = 'crew-modal-hint';
+  hint.id = 'crewHint';
+  hint.textContent = 'One name per line.';
+  box.appendChild(hint);
+
+  const actions = document.createElement('div');
+  actions.className = 'crew-modal-actions';
+  box.appendChild(actions);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.id = 'crewAddPage';
+  addBtn.textContent = 'Add 2nd Page';
+  addBtn.addEventListener('click', () => {
+    addAdditionalPage();
+    // After adding, guide user to hit Apply again if needed
+    const h = document.getElementById('crewHint');
+    if (h && _pendingCrewNames && _pendingCrewNames.length > 20) {
+      h.textContent = `2nd page added. Tap Apply again to fill the remaining ${Math.min(_pendingCrewNames.length - 20, 30)} name(s).`;
+    }
+  });
+  actions.appendChild(addBtn);
+
+  const applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.textContent = 'Apply';
+  applyBtn.addEventListener('click', () => {
+    const text = ta.value || '';
+    const names = _parseCrewText(text);
+    if (!names.length) {
+      alert('No names found. Paste one name per line.');
+      return;
+    }
+
+    // Always overwrite the crew list (names + class/local) when Upload Crew is used.
+    _pendingCrewNames = names;
+    _clearCrewFields();
+
+    // Too many names for the current page state
+    if (names.length > 20 && !extraPageAdded) {
+      _fillCrewNames(names.slice(0, 20));
+      const h = document.getElementById('crewHint');
+      if (h) {
+        h.textContent = `You pasted ${names.length} names. Page 1 holds 20. Tap 'Add 2nd Page', then tap Apply again to fill the remaining ${Math.min(names.length - 20, 30)}.`;
+      }
+      alert("More than 20 names detected. Tap 'Add 2nd Page' then tap Apply again to fill the rest.");
+      return;
+    }
+
+    // Fill page 1 (+ page 2 if present)
+    if (extraPageAdded) {
+      _fillCrewNames(names.slice(0, 50));
+      if (names.length > 50) {
+        const h = document.getElementById('crewHint');
+        if (h) h.textContent = `Only the first 50 names were used (page 1 + page 2).`;
+        alert('Only the first 50 names were used (page 1 + page 2).');
+      } else {
+        const h = document.getElementById('crewHint');
+        if (h) h.textContent = `Loaded ${names.length} name(s).`;
+      }
+    } else {
+      _fillCrewNames(names.slice(0, 20));
+      const h = document.getElementById('crewHint');
+      if (h) h.textContent = `Loaded ${Math.min(names.length, 20)} name(s).`;
+    }
+  });
+  actions.appendChild(applyBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', closeCrewModal);
+  actions.appendChild(closeBtn);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeCrewModal();
+  });
+
+  document.body.appendChild(modal);
 }
 
 async function exportPdf() {
@@ -1653,6 +2057,12 @@ function init() {
   });
   const addBtn = document.getElementById("addPageBtn");
   if (addBtn) addBtn.addEventListener("click", addAdditionalPage);
+
+  // Crew tools
+  const upCrew = document.getElementById('uploadCrewBtn');
+  if (upCrew) upCrew.addEventListener('click', openCrewModal);
+  const loadCrew = document.getElementById('loadCrewBtn');
+  if (loadCrew) loadCrew.addEventListener('click', loadLastCrew);
 
   // Ensure fonts are scaled correctly for printing
   window.addEventListener("beforeprint", applyScale);
