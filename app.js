@@ -104,6 +104,39 @@ const toggleByDD = new Map(); // ddName -> {selectEl, displayEl}
 const toggleByTXT = new Map(); // txtName -> ddName
 const choiceToggleByName = new Map(); // name -> {selectEl, displayEl} (hide arrow after pick)
 
+// --- Local "Custom…" editor manager (iPhone Safari stability) ---
+// iOS Safari sometimes blurs text inputs opened from a <select> change event.
+// We keep the custom editor visible and commit ONLY when the user taps another field.
+let _activeLocalCustom = null; // { wrap, input, commit }
+
+function _setActiveLocalCustom(obj) {
+  _activeLocalCustom = obj || null;
+}
+
+function _clearActiveLocalCustom(obj) {
+  if (!_activeLocalCustom) return;
+  if (!obj) { _activeLocalCustom = null; return; }
+  if (obj === _activeLocalCustom) { _activeLocalCustom = null; return; }
+  if (obj.wrap && _activeLocalCustom.wrap && obj.wrap === _activeLocalCustom.wrap) { _activeLocalCustom = null; return; }
+}
+
+function _localCustomOutsideHandler(e) {
+  if (!_activeLocalCustom) return;
+  const w = _activeLocalCustom.wrap;
+  if (w && w.contains && w.contains(e.target)) return;
+  try {
+    if (typeof _activeLocalCustom.commit === "function") _activeLocalCustom.commit();
+  } catch (_) {}
+  _activeLocalCustom = null;
+}
+
+// Capture phase so we commit before focus changes to the next field
+if (typeof document !== "undefined") {
+  document.addEventListener("pointerdown", _localCustomOutsideHandler, true);
+  document.addEventListener("touchstart", _localCustomOutsideHandler, true);
+  document.addEventListener("mousedown", _localCustomOutsideHandler, true);
+}
+
 // Signature pads (Option B: popup signature pad)
 // Preview canvas lives in the form; tapping/clicking it opens a larger signing pad.
 const sigPads = new Map(); // name -> {canvas, ctx, dpr, dataUrl}
@@ -931,21 +964,38 @@ function showDisplay(text) {
 
 function openCustomEditor() {
   if (!customInput) return;
+
+  // Mark this as the active Local custom editor so we only commit when the user
+  // taps another field (global outside handler).
+  _setActiveLocalCustom({ wrap, input: customInput, commit: commitCustom });
+
   sel.style.display = "none";
   if (arrowEl) arrowEl.style.display = "none";
   disp.style.display = "none";
+
   customInput.style.display = "";
   customInput.value = sel.dataset.customValue || "";
 
-  // Focus immediately (keeps typing available until they tap another field)
+  // Focus for immediate typing. iOS Safari may steal focus back after a <select> closes;
+  // we attempt a second focus shortly after.
   try {
     customInput.focus();
     if (customInput.select) customInput.select();
   } catch (_) {}
+
+  setTimeout(() => {
+    try {
+      if (_activeLocalCustom && _activeLocalCustom.input === customInput) customInput.focus();
+    } catch (_) {}
+  }, 50);
 }
 
 function commitCustom() {
   if (!customInput) return;
+
+  // We're finalizing this custom editor.
+  _clearActiveLocalCustom({ wrap });
+
   const v = (customInput.value || "").trim();
   if (!v) {
     sel.value = "";
@@ -970,10 +1020,13 @@ function commitCustom() {
 }
 
 if (customInput) {
-  customInput.addEventListener("blur", () => {
-    // Commit when the user taps another field
-    commitCustom();
+  // Mirror the current typed value so it can be exported even if iOS blurs unexpectedly.
+  customInput.addEventListener("input", () => {
+    sel.dataset.customValue = customInput.value || "";
   });
+
+  // Commit on Enter. Otherwise, the editor stays open until the user taps another field,
+  // and the global outside-tap handler will commit it.
   customInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
@@ -1132,6 +1185,9 @@ function createResetButton(def, page) {
 }
 
 function resetForm() {
+  // Close any active Local custom editor
+  _activeLocalCustom = null;
+
   // Reset toggle fields (DD -> big text overlay)
   for (const [, obj] of toggleByDD.entries()) {
     const sel = obj.selectEl;
@@ -1179,6 +1235,14 @@ function resetForm() {
 }
 
 async function exportPdf() {
+  // Commit any open Local custom editor before export (iPhone Safari stability)
+  try {
+    if (_activeLocalCustom && typeof _activeLocalCustom.commit === "function") {
+      _activeLocalCustom.commit();
+    }
+  } catch (_) {}
+  _activeLocalCustom = null;
+
   // Uses jsPDF to generate a clean 1-page PDF (no browser headers/footers),
   // so the saved output looks the same on phone and desktop.
   const jspdfNS = window.jspdf;
