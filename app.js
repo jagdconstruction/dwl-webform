@@ -1436,15 +1436,14 @@ async function exportPdf() {
     pdf.addImage(imgData2, "PNG", 0, 0, 612, 792);
   }
 
-  // Filename: DWL_<Project>_<MM.DD.YY>_<Shift>.pdf
-  // Example: DWL_69th_St._Transfer_Bridge_03.10.26_Day.pdf
-  function _safeFilenamePart(s, maxLen = 48) {
+  // Filename: DWL <Project> <MM.DD.YY> <Shift>.pdf
+  // Example: DWL 69th St. Transfer Bridge 03.10.26 Day.pdf
+  function _safeFilenamePart(s, maxLen = 120) {
     const cleaned = String(s || "")
-      .replace(/[\\\/:*?"<>|]/g, "")     // illegal on Windows
+      .replace(/[\\/:*?"<>|]/g, "")     // illegal on Windows
       .replace(/\s+/g, " ")
       .trim();
-    const underscored = cleaned.replace(/\s/g, "_");
-    return underscored.slice(0, maxLen);
+    return cleaned.slice(0, maxLen);
   }
 
   function _selectLabel(name) {
@@ -1477,7 +1476,7 @@ async function exportPdf() {
   if (datePart) parts.push(datePart);
   if (shiftWord) parts.push(_safeFilenamePart(shiftWord, 16));
 
-  pdf.save(parts.join("_") + ".pdf");
+  pdf.save(parts.join(" ") + ".pdf");
 }
 
 function collectData() {
