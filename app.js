@@ -40,6 +40,28 @@ for (const def of FIELD_DEFS) {
   }
 }
 
+// --- Add 0.5 option to time dropdowns (Straight/Over/P.T./R.T.) ---
+// These are the numeric hour dropdowns; workers need a half-hour option.
+for (const def of FIELD_DEFS) {
+  if (def.kind !== "toggle") continue;
+  if (!Array.isArray(def.options)) continue;
+
+  const hasOne = def.options.some(v => String(v).trim() === "1");
+  const hasOneHalf = def.options.some(v => String(v).trim() === "1.5");
+  const hasHalf = def.options.some(v => {
+    const s = String(v).trim();
+    return s === "0.5" || s === ".5";
+  });
+
+  if (hasOne && hasOneHalf && !hasHalf) {
+    let insertAt = 0;
+    for (let i = 0; i < def.options.length; i++) {
+      if (String(def.options[i] || "").trim() === "") { insertAt = i + 1; break; }
+    }
+    def.options.splice(insertAt, 0, "0.5");
+  }
+}
+
 // Date field helper (render as native date picker where supported)
 function _isDateFieldName(name) {
   return name === "Date" || name === "Date3_af_date";
@@ -79,7 +101,7 @@ for (const def of FIELD_DEFS) {
 
 
 // Reset exclusions (do not clear these on Reset)
-// Per request: preserve Project + Employee + Class + Local.
+// Preserve: Project, Employee names, Class, and Local (all rows, including page 2 if added)
 const PRESERVE_ON_RESET = new Set(["Project"]);
 for (const def of FIELD_DEFS) {
   if (def.kind !== "choice") continue;
@@ -93,9 +115,9 @@ for (const def of FIELD_DEFS) {
 function _shouldHideArrowAfterPick(name) {
   const n = String(name || "");
   return (
-    n.startsWith("Activity_DD_") || // Activity column (20 rows)
-    n.startsWith("Class_DD_") ||    // Class column (20 rows)
-    n.startsWith("Local_DD_")       // Local column (20 rows)
+    n.startsWith("Activity_DD_") || // Activity column (rows)
+    n.startsWith("Class_DD_") ||    // Class column (rows)
+    n.startsWith("Local_DD_")       // Local column (rows)
   );
 }
 
@@ -147,6 +169,357 @@ const sigGroupData = new Map(); // group -> dataUrl
 // Additional page (workforce continuation)
 let extraPageAdded = false;
 let extraPageDefs = [];
+
+// --- Crew memory (Employee + Class + Local) ---
+// Goal: workers can paste a crew once, then load it daily without re-typing.
+// Stored locally on the device/browser (Safari/Chrome), no JSON workflow required.
+const CREW_PAGE1_ROWS = 20;
+const CREW_PAGE2_ROWS = 30;
+const CREW_MAX_ROWS = CREW_PAGE1_ROWS + CREW_PAGE2_ROWS;
+
+const CREW_STORAGE_KEY = "DWL_LAST_CREW_V1";
+const PROFILE_STORAGE_KEY = "DWL_EMP_PROFILES_V1";
+
+let _crewSaveTimer = null;
+let _profileSaveTimer = null;
+
+function _safeJsonParse(str, fallback) {
+  try {
+    if (!str) return fallback;
+    return JSON.parse(str);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function _normalizeCrewKey(name) {
+  return String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function _empFieldName(idx) {
+  return `Dropdown1.0.${idx}`;
+}
+function _classFieldName(idx) {
+  return `Class_DD_1.${idx}`;
+}
+function _localFieldName(idx) {
+  return `Local_DD_1.${idx}`;
+}
+
+function _rowIndexFromFieldName(name) {
+  const m = String(name || "").match(/\.(\d+)$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+let EMP_PROFILES = (() => {
+  if (typeof localStorage === "undefined") return {};
+  const obj = _safeJsonParse(localStorage.getItem(PROFILE_STORAGE_KEY), {});
+  return obj && typeof obj === "object" ? obj : {};
+})();
+
+function _saveProfilesDebounced() {
+  if (typeof localStorage === "undefined") return;
+  if (_profileSaveTimer) clearTimeout(_profileSaveTimer);
+  _profileSaveTimer = setTimeout(() => {
+    try {
+      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(EMP_PROFILES || {}));
+    } catch (_) {}
+  }, 200);
+}
+
+function _readLastCrewRaw() {
+  if (typeof localStorage === "undefined") return null;
+  const obj = _safeJsonParse(localStorage.getItem(CREW_STORAGE_KEY), null);
+  if (!obj || typeof obj !== "object") return null;
+  if (!Array.isArray(obj.rows)) return null;
+  return obj;
+}
+
+function _writeLastCrewRaw(obj) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(CREW_STORAGE_KEY, JSON.stringify(obj));
+  } catch (_) {}
+}
+
+function _availableCrewRows() {
+  return extraPageAdded ? CREW_MAX_ROWS : CREW_PAGE1_ROWS;
+}
+
+function _getFieldValue(name) {
+  const el = elByName.get(name);
+  if (!el) return "";
+  return String(el.value || "");
+}
+
+function _setEmployeeValue(idx, value) {
+  const el = elByName.get(_empFieldName(idx));
+  if (!el) return;
+  el.value = String(value || "");
+}
+
+function _setChoiceValue(name, value) {
+  const obj = choiceToggleByName.get(name);
+  const el = (obj && obj.selectEl) ? obj.selectEl : elByName.get(name);
+  if (!el) return;
+  const v = String(value || "");
+
+  // For Local: ensure the option exists (so select.value doesn't snap back to blank)
+  if (String(name || "").startsWith("Local_DD_") && v && el.tagName && el.tagName.toUpperCase() === "SELECT") {
+    let opt = Array.from(el.options || []).find(o => o.value === v);
+    if (!opt) {
+      opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = v;
+      const other = Array.from(el.options || []).find(o => o.value === "__OTHER__");
+      if (other) el.add(opt, other);
+      else el.add(opt);
+    }
+  }
+
+  el.value = v;
+  try {
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  } catch (_) {
+    // Some older WebViews don't support Event constructor; fall back.
+    try {
+      const evt = document.createEvent("Event");
+      evt.initEvent("change", true, true);
+      el.dispatchEvent(evt);
+    } catch (_) {}
+  }
+}
+
+function _collectCrewSnapshot() {
+  const rows = [];
+  const total = _availableCrewRows();
+
+  for (let i = 0; i < total; i++) {
+    rows.push({
+      employee: _getFieldValue(_empFieldName(i)).trim(),
+      class: _getFieldValue(_classFieldName(i)).trim(),
+      local: _getFieldValue(_localFieldName(i)).trim(),
+    });
+  }
+
+  // Fail-safe: if page 2 isn't added yet, preserve any previously-saved page 2 rows
+  // (e.g., user pasted >20 names and we stored them before adding page 2).
+  if (!extraPageAdded) {
+    const prev = _readLastCrewRaw();
+    if (prev && Array.isArray(prev.rows) && prev.rows.length > CREW_PAGE1_ROWS) {
+      for (let i = CREW_PAGE1_ROWS; i < Math.min(prev.rows.length, CREW_MAX_ROWS); i++) {
+        const r = prev.rows[i];
+        rows[i] = rows[i] || { employee: "", class: "", local: "" };
+        rows[i] = {
+          employee: String((r && (r.employee || r.name)) || "").trim(),
+          class: String((r && r.class) || "").trim(),
+          local: String((r && r.local) || "").trim(),
+        };
+      }
+    }
+  }
+
+  const hasPage2 = rows.slice(CREW_PAGE1_ROWS).some(r => r && (r.employee || r.class || r.local));
+  return {
+    rows,
+    hasPage2,
+    savedAt: Date.now(),
+  };
+}
+
+function _scheduleCrewSave(immediate = false) {
+  if (typeof localStorage === "undefined") return;
+  if (_crewSaveTimer) clearTimeout(_crewSaveTimer);
+
+  const doSave = () => {
+    const snap = _collectCrewSnapshot();
+    _writeLastCrewRaw(snap);
+  };
+
+  if (immediate) doSave();
+  else _crewSaveTimer = setTimeout(doSave, 250);
+}
+
+function _updateProfileFromRow(idx) {
+  const emp = _getFieldValue(_empFieldName(idx)).trim();
+  if (!emp) return;
+  const key = _normalizeCrewKey(emp);
+  if (!key) return;
+
+  const cls = _getFieldValue(_classFieldName(idx)).trim();
+  const loc = _getFieldValue(_localFieldName(idx)).trim();
+
+  if (!EMP_PROFILES[key]) EMP_PROFILES[key] = { name: emp };
+  // Keep the latest formatting/case they typed
+  EMP_PROFILES[key].name = emp;
+  if (cls) EMP_PROFILES[key].class = cls;
+  if (loc) EMP_PROFILES[key].local = loc;
+
+  _saveProfilesDebounced();
+}
+
+function _applyProfileToRowIfBlank(idx) {
+  const emp = _getFieldValue(_empFieldName(idx)).trim();
+  if (!emp) return;
+  const key = _normalizeCrewKey(emp);
+  const prof = EMP_PROFILES[key];
+  if (!prof) return;
+
+  const clsName = _classFieldName(idx);
+  const locName = _localFieldName(idx);
+
+  if (!_getFieldValue(clsName).trim() && prof.class) {
+    _setChoiceValue(clsName, prof.class);
+  }
+  if (!_getFieldValue(locName).trim() && prof.local) {
+    _setChoiceValue(locName, prof.local);
+  }
+}
+
+function wireEmployeeInputForCrew(inputEl, fieldName) {
+  const idx = _rowIndexFromFieldName(fieldName);
+  if (idx == null) return;
+
+  // Apply Class/Local memory when they enter a name
+  inputEl.addEventListener("blur", () => {
+    _applyProfileToRowIfBlank(idx);
+    _scheduleCrewSave(false);
+  });
+
+  // Auto-save while typing (debounced)
+  inputEl.addEventListener("input", () => {
+    _scheduleCrewSave(false);
+  });
+}
+
+function _parseCrewNames(text) {
+  const raw = String(text || "");
+  if (!raw.trim()) return [];
+
+  // Accept: one-per-line, numbered lists, or comma-separated.
+  let parts = [];
+  if (raw.includes("\n")) {
+    parts = raw.split(/\r?\n/);
+  } else if (raw.includes(",")) {
+    parts = raw.split(",");
+  } else {
+    parts = [raw];
+  }
+
+  const out = [];
+  for (let line of parts) {
+    line = String(line || "").trim();
+    if (!line) continue;
+    // Strip leading numbering like "1." or "1)" or "1-"
+    line = line.replace(/^\s*\d+\s*[\.)-]\s*/, "").trim();
+    if (!line) continue;
+    out.push(line);
+  }
+  return out;
+}
+
+function _storeCrewFromNameList(names) {
+  const rows = new Array(CREW_MAX_ROWS).fill(null).map(() => ({ employee: "", class: "", local: "" }));
+  const max = Math.min(names.length, CREW_MAX_ROWS);
+
+  for (let i = 0; i < max; i++) {
+    const emp = String(names[i] || "").trim();
+    rows[i].employee = emp;
+
+    // Pre-fill Class/Local in storage from employee profiles (so it loads automatically on page 2 as well)
+    if (emp) {
+      const key = _normalizeCrewKey(emp);
+      const prof = EMP_PROFILES[key];
+      if (prof && prof.class) rows[i].class = prof.class;
+      if (prof && prof.local) rows[i].local = prof.local;
+    }
+  }
+
+  const hasPage2 = max > CREW_PAGE1_ROWS;
+  _writeLastCrewRaw({ rows, hasPage2, savedAt: Date.now() });
+}
+
+function _applyCrewToFormFromStorage() {
+  const saved = _readLastCrewRaw();
+  if (!saved) {
+    alert("No saved crew found on this device.");
+    return;
+  }
+
+  const needsPage2 = !!saved.hasPage2 || (Array.isArray(saved.rows) && saved.rows.slice(CREW_PAGE1_ROWS).some(r => r && (r.employee || r.class || r.local)));
+  if (needsPage2 && !extraPageAdded) {
+    alert("Your last saved crew uses 2 pages. Tap “Add Additional Page” first, then press “Load Last Crew” again.");
+    return;
+  }
+
+  const total = _availableCrewRows();
+  for (let i = 0; i < total; i++) {
+    const r = (saved.rows && saved.rows[i]) ? saved.rows[i] : {};
+    if (typeof r.employee !== "undefined") _setEmployeeValue(i, r.employee);
+    if (r.class) _setChoiceValue(_classFieldName(i), r.class);
+    if (r.local) _setChoiceValue(_localFieldName(i), r.local);
+
+    // If snapshot didn't have class/local, fill from employee profile (blank-only)
+    _applyProfileToRowIfBlank(i);
+  }
+
+  _scheduleCrewSave(true);
+}
+
+// Crew modal helpers
+function _crewModalEl() { return document.getElementById("crewModal"); }
+function _openCrewModal() {
+  const m = _crewModalEl();
+  const ta = document.getElementById("crewPaste");
+  if (!m || !ta) return;
+  m.classList.add("open");
+  m.setAttribute("aria-hidden", "false");
+  ta.value = "";
+  setTimeout(() => {
+    try { ta.focus(); } catch (_) {}
+  }, 50);
+}
+function _closeCrewModal() {
+  const m = _crewModalEl();
+  if (!m) return;
+  m.classList.remove("open");
+  m.setAttribute("aria-hidden", "true");
+}
+
+function _applyCrewPaste() {
+  const ta = document.getElementById("crewPaste");
+  if (!ta) return;
+  const names = _parseCrewNames(ta.value);
+  if (!names.length) {
+    _closeCrewModal();
+    return;
+  }
+
+  // Fill what we can on the current page(s).
+  const total = _availableCrewRows();
+  const maxFill = Math.min(names.length, total);
+
+  for (let i = 0; i < maxFill; i++) {
+    _setEmployeeValue(i, names[i]);
+    _applyProfileToRowIfBlank(i);
+  }
+
+  // Always store the full list (up to 50) so it can be loaded after adding page 2.
+  _storeCrewFromNameList(names);
+
+  // Prompt if user pasted >20 names but page 2 isn't added yet.
+  if (names.length > CREW_PAGE1_ROWS && !extraPageAdded) {
+    alert(`You pasted ${names.length} names. Rows 1–20 were filled. Tap “Add Additional Page”, then press “Load Last Crew” to fill the remaining names.`);
+  } else if (names.length > total) {
+    alert(`You pasted ${names.length} names. Only the first ${total} fit on the current pages.`);
+  }
+
+  _scheduleCrewSave(true);
+  _closeCrewModal();
+}
 
 function _cloneRectWithNewY(rect, topPct, heightPct) {
   return {
@@ -339,7 +712,7 @@ function addAdditionalPage() {
     }
   }
 
-  // Preserve employee names, class, and local on reset (same behavior as page 1)
+  // Preserve: Employee names, Class, Local on reset (same behavior as page 1)
   for (const def of extraPageDefs) {
     if (def.kind !== 'choice') continue;
     const n = String(def.name || '');
@@ -359,7 +732,7 @@ function addAdditionalPage() {
   const addBtn = document.getElementById('addPageBtn');
   if (addBtn) {
     addBtn.disabled = true;
-    addBtn.textContent = '2nd Page Added';
+    addBtn.textContent = 'Additional Page Added';
   }
 }
 
@@ -873,34 +1246,27 @@ function createChoiceField(def, page) {
   const isEmployee = def.name.startsWith("Dropdown1.");
   const isLocal = def.name.startsWith("Local_DD_");
 
-  // Employee list is now free-text (no dropdown) so crews can be pasted/remembered.
+  // Employee column: use free text inputs (no name pool dropdown).
+  // This enables fast paste-fill and avoids mobile dropdown arrow issues.
   if (isEmployee) {
     const input = document.createElement("input");
     input.type = "text";
     input.className = "field input employee-input";
     input.id = sanitizeId(def.name);
     input.name = def.name;
-    input.style.textAlign = align;
-    setScaledFont(input, def.font || 12);
-    input.style.fontWeight = '700';
+    input.autocomplete = "off";
+    input.autocapitalize = "words";
+    input.spellcheck = false;
 
-    const m = /^(?:Dropdown1\.0\.)(\d+)$/.exec(def.name);
-    const rowIdx = m ? parseInt(m[1], 10) : null;
-
-    // Auto-save crew snapshot when a name changes
-    input.addEventListener('input', scheduleSaveCrew);
-    input.addEventListener('change', () => {
-      if (rowIdx !== null) _applyPrefsToRow(rowIdx);
-      scheduleSaveCrew();
-    });
-    input.addEventListener('blur', () => {
-      if (rowIdx !== null) _applyPrefsToRow(rowIdx);
-      scheduleSaveCrew();
-    });
+    input.style.textAlign = alignFromQ(def.align);
+    setScaledFont(input, (def.font && def.font > 0 ? def.font : 12));
 
     wrap.appendChild(input);
     page.appendChild(wrap);
     elByName.set(def.name, input);
+
+    // Auto-save crew + apply Class/Local memory when employee name is entered.
+    wireEmployeeInputForCrew(input, def.name);
     return;
   }
 
@@ -972,6 +1338,10 @@ if (isEmployee) {
 
     // Local dropdowns: allow a per-row custom value.
     const customInput = isLocal ? document.createElement("input") : null;
+    const rowIdx = _rowIndexFromFieldName(def.name);
+    const isClassDD = def.name.startsWith("Class_DD_");
+    const isLocalDD = def.name.startsWith("Local_DD_");
+    const shouldRemember = isClassDD || isLocalDD;
     if (customInput) {
       customInput.type = "text";
       customInput.className = "field input";
@@ -1053,8 +1423,10 @@ function commitCustom() {
   sel.value = v;
   showDisplay(v);
 
-  // Local custom values are part of crew memory
-  scheduleSaveCrew();
+  if (shouldRemember && rowIdx != null) {
+    _updateProfileFromRow(rowIdx);
+    _scheduleCrewSave(false);
+  }
 }
 
 if (customInput) {
@@ -1095,18 +1467,14 @@ if (customInput) {
         disp.style.display = "none";
         sel.style.display = "";
         if (arrowEl) arrowEl.style.display = "";
-
-        if (def.name.startsWith('Class_DD_') || def.name.startsWith('Local_DD_')) {
-          scheduleSaveCrew();
-        }
         return;
       }
       // Hide the dropdown arrow immediately after a selection is made
       toDisplay();
 
-      // Crew memory (Class/Local only; Activity is intentionally not remembered)
-      if ((def.name.startsWith('Class_DD_') || def.name.startsWith('Local_DD_')) && (!isLocal || v !== '__OTHER__')) {
-        scheduleSaveCrew();
+      if (shouldRemember && rowIdx != null) {
+        _updateProfileFromRow(rowIdx);
+        _scheduleCrewSave(false);
       }
     });
 
@@ -1279,363 +1647,6 @@ function resetForm() {
     const el = elByName.get(nm);
     if (el && !PRESERVE_ON_RESET.has(nm)) el.value = todayIso;
   }
-}
-
-// ------------------------------------------------------------
-// Crew memory (Employee + Class + Local)
-// ------------------------------------------------------------
-
-const CREW_LAST_KEY = "DWL_LAST_CREW_V1";
-const CREW_PREFS_KEY = "DWL_EMP_PREFS_V1";
-
-let _crewSaveTimer = null;
-let _pendingCrewNames = null; // used by the Upload Crew modal when >20 names are pasted
-
-function _safeLSGet(key) {
-  try { return window.localStorage.getItem(key); } catch (_) { return null; }
-}
-
-function _safeLSSet(key, value) {
-  try { window.localStorage.setItem(key, value); } catch (_) {}
-}
-
-function _normNameKey(name) {
-  return String(name || "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
-
-function _rowFieldNames(idx) {
-  return {
-    emp: `Dropdown1.0.${idx}`,
-    cls: `Class_DD_1.${idx}`,
-    loc: `Local_DD_1.${idx}`,
-  };
-}
-
-function _getVal(name) {
-  const el = elByName.get(name);
-  return (el && ("value" in el)) ? String(el.value || "") : "";
-}
-
-function _setChoiceValue(fieldName, value) {
-  const v = String(value || "");
-  const ct = choiceToggleByName.get(fieldName);
-  const el = ct?.selectEl || elByName.get(fieldName);
-  if (!el) return;
-
-  // Ensure option exists for Local custom values
-  if (el.tagName === 'SELECT' && v) {
-    const hasOpt = Array.from(el.options).some((o) => o.value === v);
-    if (!hasOpt) {
-      const opt = document.createElement('option');
-      opt.value = v;
-      opt.textContent = v;
-      const other = Array.from(el.options).find((o) => o.value === '__OTHER__');
-      if (other) el.add(opt, other);
-      else el.add(opt);
-    }
-  }
-
-  el.value = v;
-
-  // Keep the hide-arrow dropdown UI in sync
-  if (ct) {
-    if (v) {
-      if (fieldName.startsWith('Local_DD_')) ct.selectEl.dataset.customValue = v;
-      ct.displayEl.textContent = v;
-      ct.selectEl.style.display = 'none';
-      if (ct.arrowEl) ct.arrowEl.style.display = 'none';
-      if (ct.customEl) ct.customEl.style.display = 'none';
-      ct.displayEl.style.display = 'flex';
-    } else {
-      ct.displayEl.textContent = '';
-      ct.displayEl.style.display = 'none';
-      ct.selectEl.style.display = '';
-      if (ct.arrowEl) ct.arrowEl.style.display = '';
-      if (ct.customEl) ct.customEl.style.display = 'none';
-      delete ct.selectEl.dataset.customValue;
-    }
-  }
-}
-
-function _collectCrewSnapshot() {
-  const rows = [];
-  let usesPage2 = false;
-
-  const max = extraPageAdded ? 50 : 20;
-  for (let i = 0; i < max; i++) {
-    const { emp, cls, loc } = _rowFieldNames(i);
-    const row = {
-      name: _getVal(emp),
-      classVal: _getVal(cls),
-      localVal: _getVal(loc),
-    };
-    rows.push(row);
-    if (i >= 20 && (row.name || row.classVal || row.localVal)) usesPage2 = true;
-  }
-
-  return {
-    version: 1,
-    usesPage2,
-    rows,
-    savedAt: new Date().toISOString(),
-  };
-}
-
-function _updateEmployeePrefsFromSnapshot(snap) {
-  if (!snap || !Array.isArray(snap.rows)) return;
-  let prefs = {};
-  try {
-    const raw = _safeLSGet(CREW_PREFS_KEY);
-    prefs = raw ? JSON.parse(raw) : {};
-  } catch (_) {
-    prefs = {};
-  }
-
-  for (const r of snap.rows) {
-    const key = _normNameKey(r?.name);
-    if (!key) continue;
-    prefs[key] = prefs[key] || {};
-    if (r.classVal) prefs[key].classVal = r.classVal;
-    if (r.localVal) prefs[key].localVal = r.localVal;
-  }
-
-  _safeLSSet(CREW_PREFS_KEY, JSON.stringify(prefs));
-}
-
-function _applyPrefsToRow(idx) {
-  const { emp, cls, loc } = _rowFieldNames(idx);
-  const name = _getVal(emp);
-  const key = _normNameKey(name);
-  if (!key) return;
-
-  let prefs = null;
-  try {
-    const raw = _safeLSGet(CREW_PREFS_KEY);
-    prefs = raw ? JSON.parse(raw) : null;
-  } catch (_) {
-    prefs = null;
-  }
-  if (!prefs || !prefs[key]) return;
-
-  const curClass = _getVal(cls);
-  const curLocal = _getVal(loc);
-  if (!curClass && prefs[key].classVal) _setChoiceValue(cls, prefs[key].classVal);
-  if (!curLocal && prefs[key].localVal) _setChoiceValue(loc, prefs[key].localVal);
-}
-
-function saveCrewNow() {
-  const snap = _collectCrewSnapshot();
-  _safeLSSet(CREW_LAST_KEY, JSON.stringify(snap));
-  _updateEmployeePrefsFromSnapshot(snap);
-}
-
-function scheduleSaveCrew() {
-  // Debounced to avoid excessive writes while typing.
-  if (_crewSaveTimer) clearTimeout(_crewSaveTimer);
-  _crewSaveTimer = setTimeout(() => {
-    _crewSaveTimer = null;
-    saveCrewNow();
-  }, 350);
-}
-
-function _parseCrewText(txt) {
-  const lines = String(txt || "").split(/\r?\n/);
-  const names = [];
-  for (let line of lines) {
-    line = String(line || "").trim();
-    if (!line) continue;
-    // Remove common bullets/numbering prefixes: "1) ", "1.", "- ", "• "
-    line = line.replace(/^\s*(?:[\-\*•]+\s*)+/, "");
-    line = line.replace(/^\s*\d+\s*[\)\.-]\s*/, "");
-    line = line.trim();
-    if (!line) continue;
-    names.push(line);
-  }
-  return names;
-}
-
-function _clearCrewFields() {
-  const max = extraPageAdded ? 50 : 20;
-  for (let i = 0; i < max; i++) {
-    const { emp, cls, loc } = _rowFieldNames(i);
-    const empEl = elByName.get(emp);
-    if (empEl) empEl.value = "";
-    _setChoiceValue(cls, "");
-    _setChoiceValue(loc, "");
-  }
-}
-
-function _fillCrewNames(names) {
-  const maxSlots = extraPageAdded ? 50 : 20;
-  const count = Math.min(names.length, maxSlots);
-
-  for (let i = 0; i < count; i++) {
-    const { emp } = _rowFieldNames(i);
-    const empEl = elByName.get(emp);
-    if (empEl) empEl.value = names[i];
-    _applyPrefsToRow(i);
-  }
-
-  // Save snapshot after filling
-  scheduleSaveCrew();
-}
-
-function loadLastCrew() {
-  let snap = null;
-  try {
-    const raw = _safeLSGet(CREW_LAST_KEY);
-    snap = raw ? JSON.parse(raw) : null;
-  } catch (_) {
-    snap = null;
-  }
-  if (!snap || !Array.isArray(snap.rows)) {
-    alert("No saved crew found on this device yet.");
-    return;
-  }
-
-  if (snap.usesPage2 && !extraPageAdded) {
-    alert("Your last saved crew used 2 pages. Tap 'Add 2nd Page', then tap 'Load Last Crew' again.");
-    return;
-  }
-
-  // Load employees + class/local values exactly as last saved.
-  const names = [];
-  const max = Math.min(snap.rows.length, extraPageAdded ? 50 : 20);
-  for (let i = 0; i < max; i++) {
-    const r = snap.rows[i] || {};
-    const { emp, cls, loc } = _rowFieldNames(i);
-    const empEl = elByName.get(emp);
-    if (empEl) empEl.value = String(r.name || "");
-    _setChoiceValue(cls, r.classVal || "");
-    _setChoiceValue(loc, r.localVal || "");
-    _applyPrefsToRow(i);
-    names.push(String(r.name || ""));
-  }
-
-  scheduleSaveCrew();
-}
-
-function openCrewModal() {
-  ensureCrewModal();
-  const modal = document.getElementById('crewModal');
-  const ta = document.getElementById('crewText');
-  const hint = document.getElementById('crewHint');
-  if (!modal || !ta) return;
-  if (hint) hint.textContent = "One name per line. If you paste more than 20 names, add the 2nd page.";
-  modal.classList.add('open');
-  try { ta.focus(); } catch (_) {}
-}
-
-function closeCrewModal() {
-  const modal = document.getElementById('crewModal');
-  if (modal) modal.classList.remove('open');
-}
-
-function ensureCrewModal() {
-  if (document.getElementById('crewModal')) return;
-
-  const modal = document.createElement('div');
-  modal.className = 'crew-modal';
-  modal.id = 'crewModal';
-
-  const box = document.createElement('div');
-  box.className = 'crew-modal-box';
-  modal.appendChild(box);
-
-  const title = document.createElement('div');
-  title.className = 'crew-modal-title';
-  title.textContent = 'Upload Crew (paste)';
-  box.appendChild(title);
-
-  const ta = document.createElement('textarea');
-  ta.id = 'crewText';
-  ta.className = 'crew-modal-text';
-  ta.placeholder = 'Example:\nLast, First\nLast, First\nLast, First';
-  box.appendChild(ta);
-
-  const hint = document.createElement('div');
-  hint.className = 'crew-modal-hint';
-  hint.id = 'crewHint';
-  hint.textContent = 'One name per line.';
-  box.appendChild(hint);
-
-  const actions = document.createElement('div');
-  actions.className = 'crew-modal-actions';
-  box.appendChild(actions);
-
-  const addBtn = document.createElement('button');
-  addBtn.type = 'button';
-  addBtn.id = 'crewAddPage';
-  addBtn.textContent = 'Add 2nd Page';
-  addBtn.addEventListener('click', () => {
-    addAdditionalPage();
-    // After adding, guide user to hit Apply again if needed
-    const h = document.getElementById('crewHint');
-    if (h && _pendingCrewNames && _pendingCrewNames.length > 20) {
-      h.textContent = `2nd page added. Tap Apply again to fill the remaining ${Math.min(_pendingCrewNames.length - 20, 30)} name(s).`;
-    }
-  });
-  actions.appendChild(addBtn);
-
-  const applyBtn = document.createElement('button');
-  applyBtn.type = 'button';
-  applyBtn.textContent = 'Apply';
-  applyBtn.addEventListener('click', () => {
-    const text = ta.value || '';
-    const names = _parseCrewText(text);
-    if (!names.length) {
-      alert('No names found. Paste one name per line.');
-      return;
-    }
-
-    // Always overwrite the crew list (names + class/local) when Upload Crew is used.
-    _pendingCrewNames = names;
-    _clearCrewFields();
-
-    // Too many names for the current page state
-    if (names.length > 20 && !extraPageAdded) {
-      _fillCrewNames(names.slice(0, 20));
-      const h = document.getElementById('crewHint');
-      if (h) {
-        h.textContent = `You pasted ${names.length} names. Page 1 holds 20. Tap 'Add 2nd Page', then tap Apply again to fill the remaining ${Math.min(names.length - 20, 30)}.`;
-      }
-      alert("More than 20 names detected. Tap 'Add 2nd Page' then tap Apply again to fill the rest.");
-      return;
-    }
-
-    // Fill page 1 (+ page 2 if present)
-    if (extraPageAdded) {
-      _fillCrewNames(names.slice(0, 50));
-      if (names.length > 50) {
-        const h = document.getElementById('crewHint');
-        if (h) h.textContent = `Only the first 50 names were used (page 1 + page 2).`;
-        alert('Only the first 50 names were used (page 1 + page 2).');
-      } else {
-        const h = document.getElementById('crewHint');
-        if (h) h.textContent = `Loaded ${names.length} name(s).`;
-      }
-    } else {
-      _fillCrewNames(names.slice(0, 20));
-      const h = document.getElementById('crewHint');
-      if (h) h.textContent = `Loaded ${Math.min(names.length, 20)} name(s).`;
-    }
-  });
-  actions.appendChild(applyBtn);
-
-  const closeBtn = document.createElement('button');
-  closeBtn.type = 'button';
-  closeBtn.textContent = 'Close';
-  closeBtn.addEventListener('click', closeCrewModal);
-  actions.appendChild(closeBtn);
-
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeCrewModal();
-  });
-
-  document.body.appendChild(modal);
 }
 
 async function exportPdf() {
@@ -2052,17 +2063,30 @@ function init() {
 
   // toolbar buttons
   document.getElementById("resetTop").addEventListener("click", resetForm);
+  const uploadBtn = document.getElementById("uploadCrew");
+  if (uploadBtn) uploadBtn.addEventListener("click", _openCrewModal);
+
+  const loadBtn = document.getElementById("loadCrew");
+  if (loadBtn) loadBtn.addEventListener("click", _applyCrewToFormFromStorage);
+
+  const crewApply = document.getElementById("crewApply");
+  if (crewApply) crewApply.addEventListener("click", _applyCrewPaste);
+
+  const crewCancel = document.getElementById("crewCancel");
+  if (crewCancel) crewCancel.addEventListener("click", _closeCrewModal);
+
+  const crewModal = document.getElementById("crewModal");
+  if (crewModal) {
+    crewModal.addEventListener("click", (e) => {
+      // click outside the box closes
+      if (e.target === crewModal) _closeCrewModal();
+    });
+  }
   document.getElementById("printPdf").addEventListener("click", () => {
     exportPdf();
   });
   const addBtn = document.getElementById("addPageBtn");
   if (addBtn) addBtn.addEventListener("click", addAdditionalPage);
-
-  // Crew tools
-  const upCrew = document.getElementById('uploadCrewBtn');
-  if (upCrew) upCrew.addEventListener('click', openCrewModal);
-  const loadCrew = document.getElementById('loadCrewBtn');
-  if (loadCrew) loadCrew.addEventListener('click', loadLastCrew);
 
   // Ensure fonts are scaled correctly for printing
   window.addEventListener("beforeprint", applyScale);
