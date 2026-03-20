@@ -1171,6 +1171,9 @@ function createToggleField(def, page) {
   const wrap = makeFieldWrapper(def);
   wrap.classList.add("toggle-wrap");
 
+  // Over column time fields: allow "Custom…" entry
+  const isOverCol = /\.1$/.test(String(def.ddName || ""));
+
   const sel = document.createElement("select");
   sel.className = "field select toggle-dd";
   sel.id = sanitizeId(def.ddName);
@@ -1180,6 +1183,8 @@ function createToggleField(def, page) {
   sel.style.fontWeight = '700';
 
   const opts = buildOptionElements(def.options);
+  if (isOverCol) opts.push({ value: "__OTHER__", label: "Custom…" });
+
   for (const o of opts) {
     const optEl = document.createElement("option");
     optEl.value = o.value;
@@ -1198,24 +1203,110 @@ function createToggleField(def, page) {
   setScaledFont(disp, def.fontText || (def.fontSelect || 12) + 2);
   disp.style.fontWeight = '700';
 
+  // Optional custom input (Over column only)
+  const customInput = isOverCol ? document.createElement("input") : null;
+  if (customInput) {
+    customInput.type = "text";
+    customInput.className = "field input toggle-custom";
+    customInput.style.textAlign = alignFromQ(def.align);
+    setScaledFont(customInput, def.fontSelect || 12);
+    customInput.style.display = "none";
+    customInput.autocomplete = "off";
+    customInput.spellcheck = false;
+    // Helps on phones for numeric entry, but still allows text
+    customInput.inputMode = "decimal";
+    wrap.appendChild(customInput);
+  }
+
   // initial state: show dropdown, hide display
   disp.style.display = "none";
+
+  function showSelect() {
+    disp.textContent = "";
+    disp.style.display = "none";
+    if (customInput) customInput.style.display = "none";
+    sel.style.display = "";
+  }
+
+  function showDisplay(text) {
+    disp.textContent = text || "";
+    sel.style.display = "none";
+    if (customInput) customInput.style.display = "none";
+    disp.style.display = "flex";
+  }
+
+  function openCustomEditor() {
+    if (!customInput) return;
+
+    // Use the same "outside tap commits" manager as Local custom entries.
+    _setActiveLocalCustom({ wrap, input: customInput, commit: commitCustom });
+
+    sel.style.display = "none";
+    disp.style.display = "none";
+    customInput.style.display = "";
+    customInput.value = sel.dataset.customValue || "";
+
+    try {
+      customInput.focus();
+      if (customInput.select) customInput.select();
+    } catch (_) {}
+
+    // iOS Safari may steal focus after a <select> closes; try again shortly after
+    setTimeout(() => {
+      try {
+        if (_activeLocalCustom && _activeLocalCustom.input === customInput) customInput.focus();
+      } catch (_) {}
+    }, 50);
+  }
+
+  function commitCustom() {
+    if (!customInput) return;
+
+    _clearActiveLocalCustom({ wrap });
+
+    const v = (customInput.value || "").trim();
+    if (!v) {
+      delete sel.dataset.customValue;
+      sel.value = "";
+      showSelect();
+      return;
+    }
+    sel.dataset.customValue = v;
+
+    // Keep the underlying select blank so re-selecting "Custom…" triggers change reliably.
+    sel.value = "";
+    showDisplay(v);
+  }
+
+  if (customInput) {
+    // Mirror typed value so export can still see it even if iOS blurs unexpectedly.
+    customInput.addEventListener("input", () => {
+      sel.dataset.customValue = customInput.value || "";
+    });
+
+    customInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitCustom();
+      }
+    });
+  }
 
   sel.addEventListener("change", () => {
     const v = sel.value;
     if (!v) {
-      // blank -> keep dropdown visible
-      disp.textContent = "";
-      disp.style.display = "none";
-      sel.style.display = "";
+      showSelect();
       return;
     }
-    disp.textContent = v;
-    sel.style.display = "none";
-    disp.style.display = "flex";
+    if (customInput && v === "__OTHER__") {
+      openCustomEditor();
+      return;
+    }
+    showDisplay(v);
   });
 
   function revertToSelect() {
+    if (customInput) customInput.style.display = "none";
     disp.style.display = "none";
     sel.style.display = "";
     sel.focus();
@@ -1233,7 +1324,7 @@ function createToggleField(def, page) {
   wrap.appendChild(disp);
   page.appendChild(wrap);
 
-  toggleByDD.set(def.ddName, { selectEl: sel, displayEl: disp });
+  toggleByDD.set(def.ddName, { selectEl: sel, displayEl: disp, customEl: customInput });
   toggleByTXT.set(def.txtName, def.ddName);
 }
 
@@ -1609,7 +1700,14 @@ function resetForm() {
     const disp = obj.displayEl;
 
     sel.value = "";
+    delete sel.dataset.customValue;
+
     sel.style.display = "";
+    if (obj.customEl) {
+      obj.customEl.value = "";
+      obj.customEl.style.display = "none";
+    }
+
     disp.textContent = "";
     disp.style.display = "none";
   }
@@ -1688,7 +1786,15 @@ async function exportPdf() {
   function getValueForDef(def) {
     if (def.kind === "toggle") {
       const obj = toggleByDD.get(def.ddName);
-      return (obj?.selectEl?.value || "").toString();
+      if (!obj) return "";
+      // If a custom editor is currently open, prefer its value.
+      if (obj.customEl && obj.customEl.style && obj.customEl.style.display !== "none") {
+        return String(obj.customEl.value || obj.selectEl?.dataset?.customValue || "");
+      }
+      // Prefer the displayed text (works for both normal selections and custom Over entries).
+      const shown = (obj.displayEl && obj.displayEl.textContent) ? String(obj.displayEl.textContent) : "";
+      if (shown) return shown;
+      return String(obj.selectEl?.value || obj.selectEl?.dataset?.customValue || "");
     }
     if (def.kind === "choice") {
       const el = elByName.get(def.name);
