@@ -1336,6 +1336,7 @@ function createChoiceField(def, page) {
 
   const isEmployee = def.name.startsWith("Dropdown1.");
   const isLocal = def.name.startsWith("Local_DD_");
+  const isProject = def.name === "Project";
 
   // Employee column: use free text inputs (no name pool dropdown).
   // This enables fast paste-fill and avoids mobile dropdown arrow issues.
@@ -1594,11 +1595,94 @@ if (customInput) {
   sel.style.textAlign = align;
   setScaledFont(sel, def.font || 12);
 
-  for (const o of opts) {
+  // Project: allow a "Custom…" entry (matches DSIF behavior)
+  const finalOpts = isProject ? [...opts, { value: "__OTHER__", label: "Custom…" }] : opts;
+  for (const o of finalOpts) {
     const optEl = document.createElement("option");
     optEl.value = o.value;
     optEl.textContent = o.label;
     sel.appendChild(optEl);
+  }
+
+  // Optional custom editor (Project only) — stays open until user taps another field.
+  const customInput = isProject ? document.createElement("input") : null;
+  if (customInput) {
+    customInput.type = "text";
+    customInput.className = "field input";
+    customInput.style.textAlign = align;
+    setScaledFont(customInput, (def.font && def.font > 0 ? def.font : 12));
+    customInput.style.display = "none";
+    customInput.autocomplete = "off";
+    customInput.autocapitalize = "words";
+    customInput.spellcheck = false;
+    wrap.appendChild(customInput);
+
+    function showSelect() {
+      customInput.style.display = "none";
+      sel.style.display = "";
+    }
+
+    function openCustomEditor() {
+      // Use the existing outside-tap committer (iOS Safari stability)
+      _setActiveLocalCustom({ wrap, input: customInput, commit: commitCustom });
+
+      sel.style.display = "none";
+      customInput.style.display = "";
+      customInput.value = sel.dataset.customValue || "";
+
+      try {
+        customInput.focus();
+        if (customInput.select) customInput.select();
+      } catch (_) {}
+
+      setTimeout(() => {
+        try {
+          if (_activeLocalCustom && _activeLocalCustom.input === customInput) customInput.focus();
+        } catch (_) {}
+      }, 50);
+    }
+
+    function commitCustom() {
+      _clearActiveLocalCustom({ wrap });
+
+      const v = (customInput.value || "").trim();
+      if (!v) {
+        delete sel.dataset.customValue;
+        sel.value = "";
+        showSelect();
+        return;
+      }
+
+      sel.dataset.customValue = v;
+
+      // Ensure the select contains the custom option so it is preserved for export + filename.
+      let opt = Array.from(sel.options).find((o) => o.value === v);
+      if (!opt) {
+        opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        const other = Array.from(sel.options).find((o) => o.value === "__OTHER__");
+        if (other) sel.add(opt, other);
+        else sel.add(opt);
+      }
+      sel.value = v;
+      showSelect();
+    }
+
+    customInput.addEventListener("input", () => {
+      sel.dataset.customValue = customInput.value || "";
+    });
+
+    customInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitCustom();
+      }
+    });
+
+    sel.addEventListener("change", () => {
+      if (sel.value === "__OTHER__") openCustomEditor();
+    });
   }
 
   wrap.appendChild(sel);
