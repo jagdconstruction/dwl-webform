@@ -177,7 +177,8 @@ const CREW_PAGE1_ROWS = 20;
 const CREW_PAGE2_ROWS = 30;
 const CREW_MAX_ROWS = CREW_PAGE1_ROWS + CREW_PAGE2_ROWS;
 
-const CREW_STORAGE_KEY = "DWL_LAST_CREW_V1";
+const CREW_STORAGE_KEY_PREFIX = "DWL_CREW_BY_PROJECT_V2:"; // + encodeURIComponent(normalized project)
+const CREW_STORAGE_KEY_LEGACY = "DWL_LAST_CREW_V1"; // legacy single-crew key (pre project-specific)
 const PROFILE_STORAGE_KEY = "DWL_EMP_PROFILES_V1";
 
 let _crewSaveTimer = null;
@@ -197,6 +198,39 @@ function _normalizeCrewKey(name) {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+
+// --- Project-specific crew storage helpers ---
+// Crew is now stored per Project so “Load Last Crew” loads the crew for the selected project.
+function _getProjectValueForCrew() {
+  const el = elByName.get("Project");
+  if (!el) return "";
+  let v = "";
+  try {
+    v = String(el.value || "").trim();
+    // If Project is in custom-editor mode, value may be blank while dataset.customValue contains the typed text.
+    if (!v && el.dataset && el.dataset.customValue) v = String(el.dataset.customValue || "").trim();
+  } catch (_) {
+    v = "";
+  }
+  if (!v || v === "  ") return "";
+  return v;
+}
+
+function _projectKeyForCrew(projectValue) {
+  const v = String(projectValue || "").trim();
+  if (!v) return "__no_project__";
+  return _normalizeCrewKey(v);
+}
+
+function _crewStorageKeyForProject(projectValue) {
+  const key = _projectKeyForCrew(projectValue);
+  return CREW_STORAGE_KEY_PREFIX + encodeURIComponent(key);
+}
+
+function _crewStorageKeyForCurrentProject() {
+  return _crewStorageKeyForProject(_getProjectValueForCrew());
 }
 
 function _empFieldName(idx) {
@@ -232,7 +266,8 @@ function _saveProfilesDebounced() {
 
 function _readLastCrewRaw() {
   if (typeof localStorage === "undefined") return null;
-  const obj = _safeJsonParse(localStorage.getItem(CREW_STORAGE_KEY), null);
+  const storageKey = _crewStorageKeyForCurrentProject();
+  const obj = _safeJsonParse(localStorage.getItem(storageKey), null);
   if (!obj || typeof obj !== "object") return null;
   if (!Array.isArray(obj.rows)) return null;
   return obj;
@@ -241,7 +276,13 @@ function _readLastCrewRaw() {
 function _writeLastCrewRaw(obj) {
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(CREW_STORAGE_KEY, JSON.stringify(obj));
+    const storageKey = _crewStorageKeyForCurrentProject();
+    localStorage.setItem(storageKey, JSON.stringify(obj));
+    // Record last project used (informational; not used for loading).
+    try {
+      localStorage.setItem("DWL_LAST_PROJECT_KEY_V2", _projectKeyForCrew(_getProjectValueForCrew()));
+      localStorage.setItem("DWL_LAST_PROJECT_NAME_V2", _getProjectValueForCrew());
+    } catch (_) {}
   } catch (_) {}
 }
 
@@ -445,13 +486,13 @@ function _storeCrewFromNameList(names) {
 function _applyCrewToFormFromStorage() {
   const saved = _readLastCrewRaw();
   if (!saved) {
-    alert("No saved crew found on this device.");
+    alert("No saved crew found for this project on this device. Select the correct Project and use “Upload Crew” to paste names.");
     return;
   }
 
   const needsPage2 = !!saved.hasPage2 || (Array.isArray(saved.rows) && saved.rows.slice(CREW_PAGE1_ROWS).some(r => r && (r.employee || r.class || r.local)));
   if (needsPage2 && !extraPageAdded) {
-    alert("Your last saved crew uses 2 pages. Tap “Add Additional Page” first, then press “Load Last Crew” again.");
+    alert("The saved crew for this project uses 2 pages. Tap “Add Additional Page” first, then press “Load Last Crew” again.");
     return;
   }
 
