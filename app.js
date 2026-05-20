@@ -2164,7 +2164,10 @@ async function exportPdf() {
   const projectLabel = _selectLabel("Project");
   const shiftLabel = _selectLabel("Shift");
   const shiftWord = (shiftLabel.split(/\s+/).filter(Boolean)[0] || "");
-  const crewVal = (elByName.get("Crew")?.value || "").toString().trim();
+  const crewRaw = (elByName.get("Crew")?.value || "").toString().trim();
+  const crewLabel = crewRaw
+    ? (crewRaw.toLowerCase().startsWith("crew") ? crewRaw : `Crew ${crewRaw}`)
+    : "";
 
   const dateIso = (elByName.get("Date")?.value || "").toString();
   const datePart = _dateIsoToFilePart(dateIso) || _dateIsoToFilePart(new Date().toISOString().slice(0, 10));
@@ -2173,9 +2176,65 @@ async function exportPdf() {
   if (projectLabel) parts.push(_safeFilenamePart(projectLabel));
   if (datePart) parts.push(datePart);
   if (shiftWord) parts.push(_safeFilenamePart(shiftWord, 16));
-  if (crewVal) parts.push(_safeFilenamePart(crewVal, 16));
+  if (crewLabel) parts.push(_safeFilenamePart(crewLabel, 24));
 
-  pdf.save(parts.join(" ") + ".pdf");
+  const filename = parts.join(" ") + ".pdf";
+
+  // jsPDF's built-in save() often opens a blob: URL tab on iPhone Safari.
+  // Prefer the native share sheet with a correctly named File when available.
+  const pdfBlob = pdf.output("blob");
+  await _downloadOrSharePdf(pdfBlob, filename);
+}
+
+// Best-effort save that works well on iPhone Safari and desktop.
+// 1) If supported, open the native share sheet (lets users Save to Files / Dropbox).
+// 2) Otherwise try a normal download.
+// 3) As an iOS fallback, open the PDF in a new tab so the user can Share it.
+async function _downloadOrSharePdf(blob, filename) {
+  // Share sheet (Web Share API Level 2)
+  try {
+    const file = new File([blob], filename, { type: "application/pdf" });
+    if (navigator?.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: filename });
+        return;
+      } catch (err) {
+        // If user cancels the share, do nothing.
+        if (err && err.name === "AbortError") return;
+      }
+    }
+  } catch (_) {
+    // ignore and fall back
+  }
+
+  const url = URL.createObjectURL(blob);
+
+  // Attempt download (works well on desktop + many Android browsers)
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (_) {
+    // ignore
+  }
+
+  // iPhone/iPad Safari frequently ignores a.download for blob URLs.
+  // Open the PDF so the user can use Share -> Save to Files/Dropbox.
+  const ua = navigator?.userAgent || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  if (isIOS) {
+    setTimeout(() => {
+      try { window.open(url, "_blank"); } catch (_) {}
+    }, 250);
+  }
+
+  setTimeout(() => {
+    try { URL.revokeObjectURL(url); } catch (_) {}
+  }, 30000);
 }
 
 function collectData() {
