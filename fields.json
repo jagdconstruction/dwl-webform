@@ -461,27 +461,6 @@
     },
     {
       "kind": "choice",
-      "name": "Crew",
-      "rect": {
-        "left": 40.0,
-        "top": 7.490400834517046,
-        "width": 15.0,
-        "height": 2.782833214962121
-      },
-      "options": [
-        "  ",
-        "1",
-        "2",
-        "3",
-        "4",
-        "5"
-      ],
-      "editable": false,
-      "font": 15.0,
-      "align": 0
-    },
-    {
-      "kind": "choice",
       "name": "Day",
       "rect": {
         "left": 63.20147046855852,
